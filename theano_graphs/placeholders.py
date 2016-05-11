@@ -11,7 +11,7 @@ from itertools import izip
 from collections import OrderedDict
 from schlichtanders.mymeta import lift_from, proxify
 from schlichtanders.mylists import remove_duplicates, add_up
-from pyjack import replace_all_refs
+# from pyjack import replace_all_refs
 import warnings
 
 
