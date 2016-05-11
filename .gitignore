@@ -1,0 +1,9 @@
+*.swp
+*~
+.ipynb_checkpoints
+.idea
+*.pem
+*.pyc
+*.gz
+*.pkl
+data/year
