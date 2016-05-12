@@ -9,11 +9,13 @@ import theano
 import scipy.optimize
 import climin.util
 
-from schlichtanders.mydicts import update, IdentityDict
+from schlichtanders.mydicts import update, IdentityDict, DefaultDict
 from schlichtanders.myfunctools import compose  # keep this for documentation reference
 from schlichtanders.mylists import deepflatten
 from schlichtanders.mynumpy import complex_reshape
 from schlichtanders.myoptimizers import batch, online, average, annealing
+
+from util.theano_helpers import L2
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -45,14 +47,14 @@ class TheanoOptimizer(object):
     ``kwargs_from_graph`` a class method with one argument 'graph'.
     """
 
-    def __init__(self, generic_optimizer_func, kwargs_from_graph, **kwargs):
+    def __init__(self, generic_optimizer_func, kwargs_from_model, **kwargs):
         """ Initializes optimizer to work with Theano Graphs
 
         Parameters
         ----------
         generic_optimizer_func: function
             generic optimizer function like e.g. ``scipy.optimizer.minimize``
-        kwargs_from_graph: function
+        kwargs_from_model: function
             gets called with a Graph instance (usually OptimizableGraph)
             shall return a respective kwarg for ``generic_optimizer_func``
 
@@ -60,7 +62,7 @@ class TheanoOptimizer(object):
             additional kwargs for ``generic_optimizer_func``
         """
         self.generic_optimizer_func = generic_optimizer_func
-        self.kwargs_from_graph = kwargs_from_graph
+        self.kwargs_from_model = kwargs_from_model
         self.kwargs = kwargs
 
     def set_kwargs(self, **kwargs):
@@ -90,9 +92,9 @@ class TheanoOptimizer(object):
         kwargs:
             additional arguments for the optimizer function
         """
-        kwargs_from_graph = self.kwargs_from_graph(graph.postmap())
+        kwargs_from_model = self.kwargs_from_model(graph.postmap())
 
-        update(kwargs, kwargs_from_graph, overwrite=False)
+        update(kwargs, kwargs_from_model, overwrite=False)
         update(kwargs, self.kwargs, overwrite=False)
         return self.generic_optimizer_func(**kwargs)
 
@@ -113,7 +115,7 @@ Abstract factory functions to interface Graphs conveniently.
 """
 
 
-def numerical_parameters(graph):
+def numerical_parameters(model):
     """ standard remap for accessing shared theano parameters
 
     if graph['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
@@ -121,18 +123,18 @@ def numerical_parameters(graph):
     """
     num_parameters = []
     # singleton case:
-    if len(graph['parameters']) == 1:
+    if len(model['parameters']) == 1:
         # borrow=True is for 1) the case that the optimizer works inplace, 2) its faster
-        return graph['parameters'][0].get_value(borrow=True)  # return it directly, without packing it into a list
+        return model['parameters'][0].get_value(borrow=True)  # return it directly, without packing it into a list
     # else, flatten parameters out (as we cannot guarantee matching shapes):
     else:
-        for p in graph['parameters']:
+        for p in model['parameters']:
             v = p.get_value(borrow=True)  # p.get_value(borrow=True) # TODO what does borrow?
             num_parameters += deepflatten(v)
     return np.array(num_parameters)  # default to numpy type, as this supports numeric operators like indented
 
 
-def numericalize(graph, loss_reference_name, d_order=0):
+def numericalize(model, loss_reference_name, d_order=0):
     """ numericalizes ``graph[loss_reference_name]`` or the respective derivative of order ``d_order``
 
     It works analogously to ``numerical_parameters`` in that it handles singleton cases or otherwise reshapes flattened
@@ -140,7 +142,7 @@ def numericalize(graph, loss_reference_name, d_order=0):
 
     Parameters
     ----------
-    graph : Graph
+    model : Graph
         source from which to wrap
     loss_reference_name: str
         graph[reference_name] will be wrapped
@@ -148,28 +150,28 @@ def numericalize(graph, loss_reference_name, d_order=0):
         order of derivative (0 stands for no derivative) which shall be computed
     """
     # handle singleton parameters:
-    parameters = graph['parameters'][0] if len(graph['parameters']) == 1 else graph['parameters']
+    parameters = model['parameters'][0] if len(model['parameters']) == 1 else model['parameters']
     if d_order == 0:
-        outputs = graph[loss_reference_name]
+        outputs = model[loss_reference_name]
     elif d_order == 1:
-        outputs = theano.grad(graph[loss_reference_name], parameters)
+        outputs = theano.grad(model[loss_reference_name], parameters)
     elif d_order == 2:
-        outputs = theano.gradient.hessian(graph[loss_reference_name], parameters)
+        outputs = theano.gradient.hessian(model[loss_reference_name], parameters)
     else:
         raise ValueError("Derivative of order %s is not yet implemented" % d_order)
 
-    f_theano = theano.function(graph['loss_inputs'], outputs)
-    shapes = [p.get_value(borrow=True).shape for p in graph['parameters']]  # borrow=True as it is faster
+    f_theano = theano.function(model['loss_inputs'], outputs)
+    shapes = [p.get_value(borrow=True).shape for p in model['parameters']]  # borrow=True as it is faster
 
     def f(xs, *args, **kwargs):
-        if len(graph['parameters']) == 1:
-            graph['parameters'][0].set_value(xs, borrow=True)  # xs is not packed within list
+        if len(model['parameters']) == 1:
+            model['parameters'][0].set_value(xs, borrow=True)  # xs is not packed within list
             return f_theano(*args, **kwargs)  # where initialized correctly
 
         # else, reshape flattened parameters
         else:
             xs = list(complex_reshape(xs, shapes))
-            for x, p in izip(xs, graph['parameters']):
+            for x, p in izip(xs, model['parameters']):
                 p.set_value(x, borrow=True)
 
             if d_order == 0:
@@ -184,6 +186,34 @@ def numericalize(graph, loss_reference_name, d_order=0):
     return f
 
 
+def numericalize_postmap(model):
+    loss_dorder = {
+        "f": ("loss", 0),
+        "jacobian": ("loss", 1),
+        "hessian": ("loss", 2),
+        "f_data": ("loss_data", 0),
+        "jacobian_data": ("loss_data", 1),
+        "hessian_data": ("loss_data", 2),
+        "f_regularizer": ("loss_regularizer", 0),
+        "jacobian_regularizer": ("loss_regularizer", 1),
+        "hessian_regularizer": ("loss_regularizer", 2),
+    }
+
+    def lazy_numericalize(key):
+        try:
+            loss, d_order = loss_dorder[key]
+        except KeyError:
+            raise ValueError("Key %s is not supported" % key)
+        try:
+            numericalize(model, loss_reference_name=loss, d_order=d_order)
+        except KeyError:
+            raise ValueError("Couldn't find loss %s in model" % loss)
+
+    return DefaultDict(  # DefaultDict will save keys if they are executed ones
+        lambda key: lazy_numericalize(key),
+        parameters=numerical_parameters(model)
+    )
+
 """
 Basic example use with Scipy/Climin
 -----------------------------------
@@ -194,19 +224,19 @@ We interface a standard OptimizableGraph.
 
 # TODO support missing gradient (e.g. Uniform distribution has no derivative)
 
-def _scipy_remap(graph):
+def _scipy_remap(model):
     return {
-        "fun" : numericalize(graph, 'loss'),
-        "jac" : numericalize(graph, 'loss', d_order=1),
-        "x0"  : numerical_parameters(graph),
+        "fun" : numericalize(model, 'loss'),
+        "jac" : numericalize(model, 'loss', d_order=1),
+        "x0"  : numerical_parameters(model),
     }
 
 
-def _climin_remap(graph):
+def _climin_remap(model):
     return {
-        "f"      : numericalize(graph, 'loss'),
-        "fprime" : numericalize(graph, 'loss', d_order=1),
-        "wrt"    : numerical_parameters(graph),
+        "f"      : numericalize(model, 'loss'),
+        "fprime" : numericalize(model, 'loss', d_order=1),
+        "wrt"    : numerical_parameters(model),
     }
 
 
@@ -252,13 +282,13 @@ class ScipyOptimizer(TheanoOptimizer):
         """
         self.wrapper = wrapper
         self.wrapper_kwargs = wrapper_kwargs
-        super(ScipyOptimizer, self).__init__(scipy.optimize.minimize, self.kwargs_from_graph)
+        super(ScipyOptimizer, self).__init__(scipy.optimize.minimize, self.kwargs_from_model)
 
-    def kwargs_from_graph(self, graph):
+    def kwargs_from_model(self, model):
         return {
-            "fun": self.wrapper(numericalize(graph, 'loss'), **self.wrapper_kwargs),
-            "jac": self.wrapper(numericalize(graph, 'loss', d_order=1), **self.wrapper_kwargs),
-            "x0" : numerical_parameters(graph),
+            "fun": self.wrapper(numericalize(model, 'loss'), **self.wrapper_kwargs),
+            "jac": self.wrapper(numericalize(model, 'loss', d_order=1), **self.wrapper_kwargs),
+            "x0" : numerical_parameters(model),
         }
 
 
@@ -283,13 +313,13 @@ class CliminOptimizer(TheanoOptimizer):
         """
         self.wrapper = wrapper
         self.wrapper_kwargs = wrapper_kwargs
-        super(CliminOptimizer, self).__init__(climin.util.optimizer, self.kwargs_from_graph)
+        super(CliminOptimizer, self).__init__(climin.util.optimizer, self.kwargs_from_model)
 
-    def kwargs_from_graph(self, graph):
+    def kwargs_from_model(self, model):
         return {
-            "f"     : self.wrapper(numericalize(graph, 'loss'), **self.wrapper_kwargs),
-            "fprime": self.wrapper(numericalize(graph, 'loss', d_order=1), **self.wrapper_kwargs),
-            "wrt"   : numerical_parameters(graph),
+            "f"     : self.wrapper(numericalize(model, 'loss'), **self.wrapper_kwargs),
+            "fprime": self.wrapper(numericalize(model, 'loss', d_order=1), **self.wrapper_kwargs),
+            "wrt"   : numerical_parameters(model),
         }
 
 
@@ -322,21 +352,21 @@ class ScipyAnnealingOptimizer(TheanoOptimizer):
         """
         self.wrapper = wrapper
         self.wrapper_kwargs = wrapper_kwargs
-        super(ScipyOptimizer, self).__init__(scipy.optimize.minimize, self.kwargs_from_graph)
+        super(ScipyOptimizer, self).__init__(scipy.optimize.minimize, self.kwargs_from_model)
 
-    def kwargs_from_graph(self, graph):
+    def kwargs_from_model(self, model):
         return {
             "fun": self.wrapper(
-                numericalize(graph, 'loss_data'),
-                numericalize(graph, 'loss_regularizer'),
+                numericalize(model, 'loss_data'),
+                numericalize(model, 'loss_regularizer'),
                 **self.wrapper_kwargs
             ),
             "jac": self.wrapper(
-                numericalize(graph, 'loss_data', d_order=1),
-                numericalize(graph, 'loss_regularizer', d_order=1),
+                numericalize(model, 'loss_data', d_order=1),
+                numericalize(model, 'loss_regularizer', d_order=1),
                 **self.wrapper_kwargs
             ),
-            "x0": numerical_parameters(graph),
+            "x0": numerical_parameters(model),
         }
 
 
@@ -368,64 +398,19 @@ class CliminAnnealingOptimizer(TheanoOptimizer):
         """
         self.wrapper = wrapper
         self.wrapper_kwargs = wrapper_kwargs
-        super(CliminOptimizer, self).__init__(climin.util.optimizer, self.kwargs_from_graph)
+        super(CliminOptimizer, self).__init__(climin.util.optimizer, self.kwargs_from_model)
 
-    def kwargs_from_graph(self, graph):
+    def kwargs_from_model(self, model):
         return {
             "f"     : self.wrapper(
-                numericalize(graph, 'loss_data'),
-                numericalize(graph, 'loss_regularizer'),
+                numericalize(model, 'loss_data'),
+                numericalize(model, 'loss_regularizer'),
                 **self.wrapper_kwargs
             ),
             "fprime": self.wrapper(
-                numericalize(graph, 'loss_data', d_order=1),
-                numericalize(graph, 'loss_regularizer', d_order=1),
+                numericalize(model, 'loss_data', d_order=1),
+                numericalize(model, 'loss_regularizer', d_order=1),
                 **self.wrapper_kwargs
             ),
-            "wrt"   : numerical_parameters(graph),
+            "wrt"   : numerical_parameters(model),
         }
-
-
-"""
-Further Premaps
-===============
-
-Adding a regularizer is a common procedure to improve generalizability of the model (which is usually what we want).
-The following defines a convenience postmap to easily adapt a given Model.
-"""
-
-
-def regularizer_L2(parameters):
-    return sum((p**2).sum() for p in parameters)
-
-
-def regularizer_L1(parameters):
-    return sum(abs(p).sum() for p in parameters)
-
-
-def regularizing_postmap(model, regularizer=regularizer_L2):
-    """ postmap for a standard deterministic model
-
-    Parameters
-    ----------
-    model : Model
-        kwargs to be adapted by this postmap
-    regularizer : function working on list of parameters, returning scalar loss
-        shall regularize parameters. Alternatively you can specify some string identifiers for standard regularizers
-
-    Returns
-    -------
-    IdentityDict
-    """
-    if isinstance(regularizer, basestring):
-        try:
-            regularizer = globals()["regularizer_%s" % regularizer]
-        except KeyError:
-            raise ValueError("unsupported regularizer string %s" % regularizer)
-
-    return IdentityDict(
-        lambda key: model[key],
-        loss_data=model['loss'],
-        loss_regularizer=regularizer(model['parameters']),
-        loss=model['loss'] + regularizer(model['parameters'])
-    )

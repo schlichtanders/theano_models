@@ -1,23 +1,29 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import division
-import theano.tensor as T
-import numpy as np
-from theano.tensor.sharedvar import TensorSharedVariable, _tensor_py_operators, tensor_constructor
-from theano.compile.sharedvalue import SharedVariable
-import theano
-from theano import config
-import numpy
-from theano.tensor.basic import TensorType
-from theano.gof import Container, Variable, generic, utils
 from six import integer_types
 from collections import Sequence
-import __builtin__
+from itertools import izip
+
+import theano.tensor as T
+import theano
+from theano import config
+from theano.tensor.basic import TensorType, as_tensor_variable
+from theano.gof import Variable, utils
+from theano.tensor.sharedvar import TensorSharedVariable, tensor_constructor
+import numpy
+import numpy as np
+
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 """
-generic helpers for reparameterization
-======================================
+general helpers
+===============
+"""
+
+"""
+reparameterization helpers
+--------------------------
 """
 
 
@@ -28,6 +34,39 @@ def softplus(x, module=T):
 def softplus_inv(y, module=np):
     return module.log(module.exp(y) - 1)
 
+
+"""
+norms and distances
+-------------------
+"""
+
+def L1(parameters):
+    summed_up = 0
+    n = 0
+    for p in parameters:
+        n += p.size
+        summed_up += abs(p).sum()
+    return summed_up / n
+
+
+def L2(parameters):
+    summed_up = 0
+    n = 0
+    for p in parameters:
+        n += p.size
+        summed_up += (p**2).sum()
+    return summed_up / n
+
+def norm_distance(norm=L2):
+    def distance(targets, outputs):
+        """ targets and outputs are assumed to be *lists* of theano variables """
+        return norm([t - o for t, o in izip(targets, outputs)])
+
+
+"""
+reshape helpers
+---------------
+"""
 
 def total_size(variables):
     return sum(v.size for v in variables)
@@ -53,6 +92,10 @@ def complex_reshape(vector, variables):
         yield vector[i:i+v.size].reshape(v.shape)
         i += v.size
 
+"""
+theano graph helpers
+--------------------
+"""
 
 def gen_nodes(initial_variables, filter=lambda n:True):
     for v in initial_variables:
@@ -203,14 +246,16 @@ def scalartensor_constructor(value, name=None, strict=False, allow_downcast=None
         broadcastable = (False,) * len(value.shape)
     type = TensorType(config.floatX, broadcastable=broadcastable)
     value = value.astype(config.floatX)
-    constant_shape = tensor_constructor(np.array(value.shape))
+    # constant_shape = as_tensor_variable(value.shape)
+    # TODO this gives a TheanoConstant, however the internal code requires either TheanoVariable or Tuple or List - Bug?
+    # hence, use value.shape directly for now
     return ConstantShapeTensorSharedVariable(
         type=type,
         value=value,
         name=name,
         strict=strict,
         allow_downcast=allow_downcast,
-        constant_shape=constant_shape,
+        constant_shape=value.shape,
     )
 
 
@@ -247,6 +292,11 @@ class SymbolicSharedVariable(TensorSharedVariable):
             except ValueError:
                 pass  # not in list, which is fine
             return value
+
+    @classmethod
+    def evaluate_all_unevaluated(cls, inputs_to_values):
+        while cls.UNEVALUATED:
+            cls.UNEVALUATED[0].eval(inputs_to_values)
 
 
 @shared_constructor

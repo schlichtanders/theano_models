@@ -11,14 +11,14 @@ import json
 import numpy as np
 import theano
 import theano.tensor as T
-from theano import gof, shared, config
+from theano import gof, config
 from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update
 from schlichtanders.myfunctools import Compose, I, fmap
 from schlichtanders.mylists import sequencefy
 from schlichtanders.mymeta import proxify
-from util.theano_helpers import complex_reshape, SymbolicSharedVariable
+from util.theano_helpers import complex_reshape, SymbolicSharedVariable, shared
 from pprint import pformat
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -79,6 +79,9 @@ class Model(MutableMapping):
 
     def postmap(self, **kwargs):
         return self._postmap(self, **kwargs)
+
+    def set_postmap(self, postmap):
+        self._postmap = postmap
 
     def add_postmap(self, postmap, call_first=False):
         """ combines existing postmap with new postmap """
@@ -190,20 +193,9 @@ class Model(MutableMapping):
     # -----------------------
 
     def __str__(self):
-        def str_value(v):  # because str(list) does call repr() internally
-            return map(str, v) if isinstance(v, Sequence) else str(v)
-        return json.dumps(fmap(str_value, self), sort_keys=True, indent=2)
+        return pformat(dict(self), indent=2)
 
-        return pformat(
-            '{%s}' % ','.join('%s: %s' % (k, str_v(v)) for k, v in self.iteritems()),
-            indent=2
-        )
-
-    def __repr__(self):
-        return pformat(
-            '{%s}' % ','.join('%s: %s' % (k, repr(v)) for k, v in self.iteritems()),
-            indent=2
-        )
+    __repr__ = __str__
 
 
 """
@@ -273,19 +265,23 @@ def reparameterize_map(f, finv):
     ----------
     f : function
         only theano.tensor functions are needed here
-    finv : function
-        should have module kwarg indicating where the methods should be used from (numpy or theano.tensor)
+    finv : function with module kwarg
+        module kwarg must indicate where the methods should be used from (numpy or theano.tensor typically)
+
     Returns
     -------
         mappable function
     """
     def reparameterize(sv):
         if isinstance(sv, SymbolicSharedVariable):
-            new_sv = shared(finv(sv.symbol, module=T))
+            ret = shared(finv(sv.symbol, module=T))
         else:
-            new_sv = shared(finv(sv.get_value(), module=np))
-        proxify(sv, f(new_sv))
-        return new_sv  # instead of old parameter, now refer directly to the new underlying parameter
+            ret = shared(finv(sv.get_value(), module=np))
+        ret.name = sv.name + "_" + f.func_name
+        new_sv = f(ret)
+        new_sv.name = sv.name
+        proxify(sv, new_sv)
+        return ret  # instead of old parameter, now refer directly to the new underlying parameter
     return reparameterize
 
 

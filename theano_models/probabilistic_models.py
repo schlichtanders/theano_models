@@ -8,11 +8,13 @@ from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
 from base import Model
+from postmaps import probabilistic_optimizer_postmap, variational_postmap
 from deterministic_models import InvertibleModel
+from schlichtanders.mydicts import update
 from util.theano_helpers import shared
-from schlichtanders.mydicts import IdentityDict
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
+
 
 """
 Probabilistic Modelling
@@ -61,17 +63,6 @@ on the very same parameters.
 Basic Probabilistic Model
 -------------------------
 """
-
-
-def probabilistic_optimizer_premap(graph):
-    # virtual random variable
-    # (we cannot use graph['RV'] itself, as the automatic gradients will get confused because graph['RV'] is a complex sampler)
-    RV = graph['RV'].type()  # like targets for deterministic model
-    return IdentityDict(
-        lambda key: graph[key],
-        loss_inputs = [RV] + graph['inputs'],
-        loss = -graph['logP'](RV)
-    )
 
 
 class ProbabilisticModel(Model):
@@ -138,6 +129,8 @@ class ProbabilisticModel(Model):
         if inputs is None:
             inputs = []
 
+        further_references.pop('outputs', None)  # must not be given twice; None is essential as otherwise a Keyerror is thrown if outputs is not given
+
         super(ProbabilisticModel, self).__init__(
             inputs=inputs,
             outputs=RV,
@@ -147,7 +140,7 @@ class ProbabilisticModel(Model):
             **further_references
         )
         # could in principal be called before the constructor, however this order seems to make sense for a postmap:
-        self.add_postmap(probabilistic_optimizer_premap)
+        self.set_postmap(probabilistic_optimizer_postmap)
 
 
 #: alias
@@ -172,7 +165,7 @@ which itself is an approximation (a lower bound) of exactly this Probability dis
 """
 
 
-def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_keys=('parameters', 'inputs'), clone_prior=True):
+def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     """
     Models Y[randomize_key] as random variable Xs using Bayes. I.e. like Y[randomize_key] = Xs. However, the probability
     function changes, concretely Y['logP'] becomes an integral. Here, this intergral is approximated by the
@@ -224,9 +217,6 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_ke
     kl_prior : theano expression or Graph (if parameters need to be merged)
         kullback leibler divergence KL(X.P||prior). This does not depend any long on X if I understood it correctly,
         but only on hyperparameters.
-
-    merge_keys : list of str
-        keys to be merged from all Graph objects part of this operation. Defaults to ['parameters', 'inputs']
     """
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
@@ -263,14 +253,19 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_ke
 
     # core variational bayes
     # ----------------------
-    loglikelihood = Y['logP']
-    if "n_data" not in Y:
-        Y['n_data'] = theano.shared(1)  # needs to be updated externally
 
-    Y[randomize_key] = Xs  # make original parameters random
+    Y['kl_prior'] = kl_prior
+
+    Y['loglikelihood'] = Y['logP']
+    if "n_data" not in Y:
+        Y['n_data'] = shared(1)  # needs to be updated externally
+
+    Y[randomize_key] = Xs  # e.g. make original parameters random
+
     def variational_lower_bound(RV):
-        return loglikelihood(RV) - 1/Y['n_data'] * kl_prior
+        return Y['loglikelihood'](RV) - 1/Y['n_data'] * kl_prior
     Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
+    Y.set_postmap(variational_postmap)
 
 
 """
@@ -279,7 +274,7 @@ Noise Models
 """
 
 
-class GaussianNoise(ProbabilisticModel):
+class DiagGaussianNoise(ProbabilisticModel):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -334,7 +329,7 @@ class GaussianNoise(ProbabilisticModel):
             - (1/2 * T.sum((RV - input) ** 2 / self.var))  # core exponential
         )  # everything is elementwise
 
-        super(DiagGauss, self).__init__(
+        super(DiagGaussianNoise, self).__init__(
             RV=RV,
             logP=logP,
             inputs=[input],
@@ -385,41 +380,33 @@ class DiagGauss(ProbabilisticModel):
         rng : Theano RandomStreams object, optional.
             Random number generator to draw samples from the distribution from.
         """
+        # parameter preprocessing
+        # -----------------------
         # ensure length is the same:
         if init_mean is not None and init_var is not None and len(init_mean) != len(init_var):
             raise ValueError("means and variances need to be of same length")
 
-        # initialize empty defaults:
-        if init_mean is None:
-            init_mean = np.zeros(output_size, dtype=config.floatX)
-        else:
+        if init_mean is not None:
             init_mean = np.asarray(init_mean, dtype=config.floatX)
             output_size = len(init_mean)
-
-        if init_var is None:
-            init_var = np.ones(output_size, dtype=config.floatX)
-        else:
+        if init_var is not None:
             init_var = np.asarray(init_var, dtype=config.floatX)
             output_size = len(init_var)
 
-        self.rng = RandomStreams() if rng is None else rng
+        if init_mean is None:
+            init_mean = np.zeros(output_size, dtype=config.floatX)
+        if init_var is None:
+            init_var = np.ones(output_size, dtype=config.floatX)
 
+        # main part
+        # ---------
         self.mean = shared(init_mean, "mean")  # TODO broadcastable?
-        self.var = shared(init_var, "var")  # TODO broadcastable?
+        dgn = DiagGaussianNoise(self.mean, init_var, rng)
+        self.var = dgn.var
 
-        noise = self.rng.normal(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
-        RV = self.mean + T.sqrt(self.var) * noise
-        logP = lambda RV: (
-            (-output_size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log(self.var).sum()  # normalizing constant
-            - (1/2 * T.sum((RV - self.mean) ** 2 / self.var))  # core exponential
-        )  # everything is elementwise
-
-        super(DiagGauss, self).__init__(
-            RV=RV,
-            logP=logP,
-            parameters=[self.mean],
-            parameters_positive=[self.var]
-        )
+        kwargs = {'inputs': [], 'parameters': [self.mean]}
+        update(kwargs, dgn, overwrite=False)
+        super(DiagGauss, self).__init__(**kwargs)
 
 
 class Uniform(ProbabilisticModel):
@@ -481,9 +468,6 @@ class Uniform(ProbabilisticModel):
             parameters=[self.start],
             parameters_positive=[self.offset]
         )
-
-
-
 
 
 """

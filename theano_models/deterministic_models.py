@@ -5,18 +5,20 @@ from __future__ import division
 import numpy as np
 import theano.tensor as T
 from theano import gradient, gof
-from theano import shared, config, grad
+from theano import config, grad
 from theano.tensor import nlinalg
 from itertools import izip
 
 from breze.arch.component import transfer as _transfer
 
 from base import merge_parameters, Model
-from util.theano_helpers import softplus
+from postmaps import deterministic_optimizer_postmap
+from util.theano_helpers import softplus, shared
 from placeholders import Placeholder
-from schlichtanders.mydicts import IdentityDict
+
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
+
 
 """
 Deterministic Modelling
@@ -30,46 +32,6 @@ Basic Deterministic Model
 In combination with referenced parameters, which are optimizable, we in fact already get a well defined
 deterministically optimizable model
 """
-
-
-def deterministic_optimizer_premap(distance=None):
-    """ builds premap for a standard deterministic model
-
-    Parameters
-    ----------
-    distance : metric, function working on two lists of theano expressions
-        comparing targets (given as extra input for optimizer) with outputs
-        Defaults to standard square loss.
-
-    Returns
-    -------
-    standard premap for optimizer
-    """
-    if distance is None:
-        def distance(targets, outputs):
-            """ targets and outputs are assumed to be *lists* of theano variables """
-            summed_up = 0
-            n = 0
-            for t, o in izip(targets, outputs):
-                s = (t - o)**2
-                n += s.size
-                summed_up += s.sum()
-            return summed_up / n
-
-    def premap(graph):
-        if isinstance(graph['outputs'], gof.graph.Variable):
-            targets = [graph['outputs'].type()]
-            outputs = [graph['outputs']]
-        else:
-            targets = [o.type() for o in graph['outputs']]
-            outputs = graph['outputs']
-
-        return IdentityDict(
-            lambda key: graph[key],
-            loss_inputs= targets + graph['inputs'],
-            loss= distance(targets, outputs)
-        )
-    return premap
 
 
 class DeterministicModel(Model):
@@ -89,7 +51,7 @@ class DeterministicModel(Model):
     If a complete new interface is wanted, please overwrite __optimizer_premap__ after creating the instance
     """
 
-    def __init__(self, outputs, parameters, inputs=None, distance=None, **further_references):
+    def __init__(self, outputs, parameters, inputs=None, **further_references):
         """ constructs general deterministic model
 
         Parameters
@@ -116,7 +78,7 @@ class DeterministicModel(Model):
             **further_references
         )
         # could in principal be called before the constructor, however this order seems to make sense for a postmap:
-        self.add_postmap(deterministic_optimizer_premap(distance))
+        self.set_postmap(deterministic_optimizer_postmap)
 
 
 #: alias
