@@ -7,7 +7,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 from theano.printing import debugprint
 import theano.tensor as T
 
-from theano_models.theano_graphs.theano_placeholders import substitute, ReferencedTheanoGraph, Placeholder
+from theano_models import Model, Placeholder
 
 # Example Problem
 # ---------------
@@ -19,24 +19,10 @@ y = T.dscalar('y')
 p = x + y
 m = x - y
 
-
-# Test substitutions
-# ------------------
-
-s = substitute([p + m], replace={p:m})
-
-print line % "p + m"
-debugprint(p + m)
-print line % "m + m"
-debugprint(m + m)
-print line % "substitution"
-debugprint(s)
-
-
 # Test ReferencedTheanoGraph
 # --------------------------
 
-refgraph = ReferencedTheanoGraph([x + y])
+refgraph = Model([x + y])
 print line % "refgraph"
 print refgraph
 
@@ -54,7 +40,7 @@ debugprint(place)
 
 print line % "complex placeholder"
 op_model2 = Placeholder("model2", itypes=[T.dscalar, T.dscalar], otypes=[T.dscalar])
-refgraph2 = ReferencedTheanoGraph([x - y])
+refgraph2 = Model([x - y])
 p1 = op_model(x,y)
 p2 = op_model2(x,y)
 
