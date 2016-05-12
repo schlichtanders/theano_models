@@ -8,7 +8,7 @@ from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
 from deterministic_models import InvertibleModel
-from theano_graphs.theano_graphs.util.theano_helpers import softplus, softplus_inv, shared
+from util.theano_helpers import softplus, softplus_inv, shared
 from models import ProbabilisticModel
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -38,7 +38,7 @@ class DiagGauss(ProbabilisticModel):
         Random number generator to draw samples from the distribution from.
     """
 
-    def __init__(self, size=1, init_mean=None, init_var=None, rng=None):
+    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None):
         """Initialise a DiagGauss random variable with given mean and variance.
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -46,7 +46,7 @@ class DiagGauss(ProbabilisticModel):
         Parameters
         ----------
 
-        size : int
+        output_size : int
             number of outputs
         init_mean : np.array
             means, same length as variances
@@ -61,51 +61,40 @@ class DiagGauss(ProbabilisticModel):
 
         # initialize empty defaults:
         if init_mean is None:
-            init_mean = np.zeros(size, dtype=config.floatX)
+            init_mean = np.zeros(output_size, dtype=config.floatX)
         else:
             init_mean = np.asarray(init_mean, dtype=config.floatX)
-            size = len(init_mean)
+            output_size = len(init_mean)
 
         if init_var is None:
-            init_var = np.ones(size, dtype=config.floatX)
+            init_var = np.ones(output_size, dtype=config.floatX)
         else:
             init_var = np.asarray(init_var, dtype=config.floatX)
-            size = len(init_var)
-
+            output_size = len(init_var)
 
         self.rng = RandomStreams() if rng is None else rng
 
         self.mean = shared(init_mean, "mean")  # TODO broadcastable?
-        self._Var = shared(self.Var_from_var(init_var), "_Var")  # TODO broadcastable?, TODO stays floatX?
-        self.var = self.var_from_Var(self._Var)  # ensures var is always positive
-        self.var.name = "var"
+        self.var = shared(init_var, "var")  # TODO broadcastable?
 
-        noise = self.rng.normal(size=(size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        noise = self.rng.normal(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         RV = self.mean + T.sqrt(self.var) * noise
         logP = lambda RV: (
-            (-size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
+            (-output_size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log(self.var).sum()  # normalizing constant
             - (1/2 * T.sum((RV - self.mean) ** 2 / self.var))  # core exponential
         )  # everything is elementwise
 
         super(DiagGauss, self).__init__(
             RV=RV,
             logP=logP,
-            parameters=[self.mean, self._Var]
+            parameters=[self.mean],
+            parameters_positive=[self.var]
         )
-
-    @staticmethod
-    def var_from_Var(_Var, module=T):
-        return softplus(_Var, module)
-
-    @staticmethod
-    def Var_from_var(var, module=np):
-        return softplus_inv(var, module)
-
 
 
 class Uniform(ProbabilisticModel):
 
-    def __init__(self, size=1, init_start=None, init_offset=None, rng=None):
+    def __init__(self, output_size=1, init_start=None, init_offset=None, rng=None):
         """ Initialise a uniform random variable with given range (by start and offset).
 
         Start default to 0, and offset to 1, if not further specified, i.e. standard uniform random variable.
@@ -113,7 +102,7 @@ class Uniform(ProbabilisticModel):
         Parameters
         ----------
 
-        size : int
+        output_size : int
             number of outputs
         init_start : np.array
             arbitrary, same length as offsets
@@ -130,16 +119,16 @@ class Uniform(ProbabilisticModel):
 
         # initialize empty defaults:
         if init_start is None:
-            init_start = np.zeros(size, dtype=config.floatX)
+            init_start = np.zeros(output_size, dtype=config.floatX)
         else:
             init_start = np.asarray(init_start, dtype=config.floatX)
-            size = len(init_start)
+            output_size = len(init_start)
 
         if init_offset is None:
-            init_offset = np.ones(size, dtype=config.floatX)
+            init_offset = np.ones(output_size, dtype=config.floatX)
         else:
             init_offset = np.asarray(init_offset, dtype=config.floatX)
-            size = len(init_offset)
+            output_size = len(init_offset)
 
         if (init_offset <= 0).any():
             raise ValueError("offset must be positive")
@@ -147,11 +136,9 @@ class Uniform(ProbabilisticModel):
         self.rng = RandomStreams() if rng is None else rng
 
         self.start = shared(init_start, "start")  # TODO broadcastable?
-        self._Offset = shared(self.Offset_from_offset(init_offset), '_Offset')  # TODO broadcastable?, TODO stays floatX?
-        self.offset = self.offset_from_Offset(self._Offset)
-        self.offset.name = "offset"
+        self.offset = shared(init_offset, "offset")  # TODO broadcastable?
 
-        noise = self.rng.uniform(size=(size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         RV = noise * self.offset + self.start
 
         logP = lambda RV: (
@@ -161,17 +148,9 @@ class Uniform(ProbabilisticModel):
         super(Uniform, self).__init__(
             RV=RV,
             logP=logP,
-            parameters=[self.start, self._Offset]
+            parameters=[self.start],
+            parameters_positive=[self.offset]
         )
-
-    @staticmethod
-    def offset_from_Offset(_Offset, module=T):
-        return softplus(_Offset, module)
-
-    @staticmethod
-    def Offset_from_offset(offset, module=np):
-        return softplus_inv(offset, module)
-
 
 
 """
@@ -179,9 +158,8 @@ Noise Models
 ============
 """
 
-# such as gauss is indeed a noise model, in that the mean is kind of deterministic, only corrupted by noise
 
-class DiagGauss(ProbabilisticModel):
+class GaussianNoise(ProbabilisticModel):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes

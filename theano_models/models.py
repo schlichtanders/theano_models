@@ -6,7 +6,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 import theano.tensor as T
 import theano
-from base import Graph
+from base import Model
 from schlichtanders.mydicts import IdentityDict
 from copy import copy, deepcopy
 from itertools import izip
@@ -68,7 +68,7 @@ def deterministic_optimizer_premap(distance=None):
     return premap
 
 
-class DeterministicModel(Graph):
+class DeterministicModel(Model):
     """ models prediction of some y (outputs) given some optional xs (inputs)
 
     hence, loss compares outputs with targets, while outputs depend on some input
@@ -179,7 +179,7 @@ def probabilistic_optimizer_premap(graph):
     )
 
 
-class ProbabilisticModel(Graph):
+class ProbabilisticModel(Model):
     """ Returns a random variable with Probability Distribution attached (.P)
 
     While the random variable describes some target, its distribution can depend on further parameters. This can be
@@ -345,7 +345,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_ke
     # we could also compute the Kullback-Leibler divergence symbolically, however this is not (yet?) the case]
     if kl_prior is not None:
         # no substitution necessary as kl_prior should not depend on X anylonger, but only on hyperparameters.
-        if isinstance(kl_prior, Graph):
+        if isinstance(kl_prior, Model):
             kl_prior = kl_prior['outputs']  # assumes single output
         # else
         # kl_prior is already standard expression
@@ -376,46 +376,3 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_ke
     def variational_lower_bound(RV):
         return loglikelihood(RV) - 1/Y['n_data'] * kl_prior
     Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
-
-
-
-"""
-further premaps
-===============
-"""
-
-
-def regularizer_L2(parameters):
-    return sum((p**2).sum() for p in parameters)
-
-
-def regularizer_L1(parameters):
-    return sum(abs(p).sum() for p in parameters)
-
-
-def regularizing_postmap(regularizer):
-    """ builds premap for a standard deterministic model
-
-    Parameters
-    ----------
-    regularizer : function working on list of parameters, returning scalar loss
-        shall regularize parameters. Alternatively you can specify some string identifiers for standard regularizers
-
-    Returns
-    -------
-    standard premap for optimizer
-    """
-    if isinstance(regularizer, basestring):
-        try:
-            regularizer = globals()["regularizer_%s" % regularizer]
-        except KeyError:
-            raise ValueError("unsupported regularizer string %s" % regularizer)
-
-    def postmap(graph):
-        return IdentityDict(
-            lambda key: graph[key],
-            loss_data=graph['loss'],
-            loss_regularizer=regularizer(graph['parameters']),
-            loss=graph['loss'] + regularizer(graph['parameters'])
-        )
-    return postmap

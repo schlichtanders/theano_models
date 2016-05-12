@@ -5,14 +5,8 @@ import theano
 from theano import gof
 from theano import gradient
 from copy import copy, deepcopy
-from collections import Sequence, MutableSequence, Mapping, MutableMapping
+from collections import Sequence
 import itertools as itt
-from itertools import izip
-from collections import OrderedDict
-from schlichtanders.mymeta import lift_from, proxify
-from schlichtanders.mylists import remove_duplicates, add_up
-# from pyjack import replace_all_refs
-import warnings
 
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'

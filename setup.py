@@ -21,11 +21,11 @@ class CleanCmd(Clean):
 
         for dirpath, dirnames, filenames in os.walk('.'):
             for filename in filenames:
-                if (filename.endswith('.so') or \
-                    filename.endswith('.pyd') or \
-                    filename.endswith('.pyc') or \
-                    filename.endswith('_wrap.c') or \
-                    filename.startswith('wrapper_') or \
+                if (filename.endswith('.so') or
+                    filename.endswith('.pyd') or
+                    filename.endswith('.pyc') or
+                    filename.endswith('_wrap.c') or
+                    filename.startswith('wrapper_') or
                     filename.endswith('~')):
                         os.unlink(os.path.join(dirpath, filename))
 
@@ -36,7 +36,7 @@ class CleanCmd(Clean):
                     shutil.rmtree(os.path.join(dirpath, dirname))
 
 setup(
-    name='theano_graphs',
+    name='theano_models',
     version='0.1.0',
     description='abstract helpers to simplify working with theano expressions in an machine learning context',
     author=__author__,
@@ -58,7 +58,6 @@ setup(
     ],
     # include_package_data=True,  # should work, but doesn't, I think pip does not recognize git automatically
     package_data={
-        'examples': ['*'],
         'data': ['*/*'],
     },
     cmdclass={'clean': CleanCmd}

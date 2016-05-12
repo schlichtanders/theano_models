@@ -5,15 +5,16 @@ from __future__ import division
 from itertools import izip
 
 import numpy as np
-import scipy.optimize
 import theano
-
+import scipy.optimize
 import climin.util
-from schlichtanders.mydicts import update
+
+from schlichtanders.mydicts import update, IdentityDict
 from schlichtanders.myfunctools import compose  # keep this for documentation reference
 from schlichtanders.mylists import deepflatten
 from schlichtanders.mynumpy import complex_reshape
 from schlichtanders.myoptimizers import batch, online, average, annealing
+
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 
@@ -383,3 +384,48 @@ class CliminAnnealingOptimizer(TheanoOptimizer):
             ),
             "wrt"   : numerical_parameters(graph),
         }
+
+
+"""
+Further Premaps
+===============
+
+Adding a regularizer is a common procedure to improve generalizability of the model (which is usually what we want).
+The following defines a convenience postmap to easily adapt a given Model.
+"""
+
+
+def regularizer_L2(parameters):
+    return sum((p**2).sum() for p in parameters)
+
+
+def regularizer_L1(parameters):
+    return sum(abs(p).sum() for p in parameters)
+
+
+def regularizing_postmap(model, regularizer=regularizer_L2):
+    """ postmap for a standard deterministic model
+
+    Parameters
+    ----------
+    model : Model
+        kwargs to be adapted by this postmap
+    regularizer : function working on list of parameters, returning scalar loss
+        shall regularize parameters. Alternatively you can specify some string identifiers for standard regularizers
+
+    Returns
+    -------
+    IdentityDict
+    """
+    if isinstance(regularizer, basestring):
+        try:
+            regularizer = globals()["regularizer_%s" % regularizer]
+        except KeyError:
+            raise ValueError("unsupported regularizer string %s" % regularizer)
+
+    return IdentityDict(
+        lambda key: model[key],
+        loss_data=model['loss'],
+        loss_regularizer=regularizer(model['parameters']),
+        loss=model['loss'] + regularizer(model['parameters'])
+    )

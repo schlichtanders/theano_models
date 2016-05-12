@@ -5,13 +5,13 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 import theano.tensor as T
 from theano.printing import debugprint
 
-from theano_graphs.theano_graphs.theano_placeholders import ReferencedTheanoGraph, Graph, Placeholder
+from theano_models import Model, Placeholder
 
 x = T.dscalar('x')
 y = T.dscalar('y')
 
-plus = ReferencedTheanoGraph([x + y])
-minus = Graph([x - y])  # `Graph` is short for `ReferencedTheanoGraph`
+plus = Model([x + y])
+minus = Model([x - y])
 
 op_model1 = Placeholder("model1", itypes=[T.dscalar, T.dscalar], otypes=[T.dscalar])
 op_model2 = Placeholder("model2", itypes=[T.dscalar, T.dscalar], otypes=[T.dscalar])

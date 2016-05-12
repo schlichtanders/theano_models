@@ -9,8 +9,8 @@ from theano import shared, config, grad
 from theano.tensor import nlinalg
 
 from breze.arch.component import transfer as _transfer
-from base import merge_parameters, Graph
-from theano_graphs.theano_graphs.util.theano_helpers import softplus
+from base import merge_parameters, Model
+from util.theano_helpers import softplus
 from models import DeterministicModel
 from placeholders import Placeholder
 
@@ -28,8 +28,8 @@ class AffineNonlinear(DeterministicModel):
         # input needs to be vector
         if input is None:
             input = T.dvector()
-        elif isinstance(input, Graph):
-            input = Graph['output']
+        elif isinstance(input, Model):
+            input = Model['output']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -55,8 +55,8 @@ class Mlp(DeterministicModel):
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
             input = T.dvector()
-        elif isinstance(input, Graph):
-            input = Graph['output']
+        elif isinstance(input, Model):
+            input = Model['output']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -187,8 +187,8 @@ class PlanarTransform(InvertibleModel):
     def __init__(self, input=None, h=T.tanh):
         if input is None:
             input = T.dvector(name="z")
-        elif isinstance(input, Graph):
-            input = Graph['output']
+        elif isinstance(input, Model):
+            input = Model['output']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -230,8 +230,8 @@ class RadialTransform(InvertibleModel):
         # TODO raise error for non-valid init_beta or init_alpha!
         if input is None:
             input = T.dvector(name="z")
-        elif isinstance(input, Graph):
-            input = Graph['output']
+        elif isinstance(input, Model):
+            input = Model['output']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 

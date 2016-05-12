@@ -7,7 +7,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 from theano.printing import debugprint
 import theano.tensor as T
 
-from theano_graphs.theano_graphs.theano_placeholders import substitute, ReferencedTheanoGraph, Placeholder
+from theano_models.theano_graphs.theano_placeholders import substitute, ReferencedTheanoGraph, Placeholder
 
 # Example Problem
 # ---------------

@@ -6,24 +6,25 @@ import warnings
 from collections import Sequence, MutableMapping
 from copy import copy
 from itertools import izip
+import json
 
 import numpy as np
 import theano
 import theano.tensor as T
-from theano import gof
-from theano import shared
+from theano import gof, shared, config
 from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update
-from schlichtanders.myfunctools import compose, identity
+from schlichtanders.myfunctools import Compose, I, fmap
 from schlichtanders.mylists import sequencefy
 from schlichtanders.mymeta import proxify
-from theano_graphs.theano_graphs.util.theano_helpers import complex_reshape, SymbolicSharedVariable
+from util.theano_helpers import complex_reshape, SymbolicSharedVariable
+from pprint import pformat
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 
-class Graph(MutableMapping):
+class Model(MutableMapping):
     """
     This structure is intended to be a view onto a TheanoGraph with extra references to:
         - either theano variables directly,
@@ -53,10 +54,10 @@ class Graph(MutableMapping):
         further_references: kwargs of string: (theano expressions, or lists thereof)
             possible further references
         """
-        if isinstance(outputs, Graph):
+        if isinstance(outputs, Model):
             outputs = outputs['outputs']
-        if isinstance(inputs, Graph):
-            inputs = Graph['outputs']
+        if isinstance(inputs, Model):
+            inputs = Model['outputs']
         if not isinstance(inputs, Sequence):
             raise ValueError("need *list* of theano expressions as inputs")
 
@@ -65,9 +66,7 @@ class Graph(MutableMapping):
             'inputs': gof.graph.inputs(outputs) if inputs is None else inputs,
         }
         self.references.update(further_references)
-        self._postmap = identity
-        # alternatively for efficiency use from schlichtanders.myfunctools import I, Compose
-        # but as efficiency is not needed at this stage, the basic compose may be simpler to understand
+        self._postmap = I  # we use a complex Compose, so that we can call the _postmap with complex kwargs
 
     def __copy__(self):
         cls = self.__class__
@@ -78,15 +77,15 @@ class Graph(MutableMapping):
     def function(self):
         return theano.function(self['inputs'], self['outputs'])
 
-    def postmap(self):
-        return self._postmap(self)
+    def postmap(self, **kwargs):
+        return self._postmap(self, **kwargs)
 
     def add_postmap(self, postmap, call_first=False):
         """ combines existing postmap with new postmap """
         if call_first:
-            self._postmap = compose(self._postmap, postmap)
+            self._postmap = self._postmap + postmap
         else:
-            self._postmap = compose(postmap, self._postmap)
+            self._postmap = postmap + self._postmap
 
     # Substitution Interface
     # ----------------------
@@ -103,7 +102,7 @@ class Graph(MutableMapping):
         if not isinstance(old, Sequence):
             old = [old]
 
-        if isinstance(new, Graph):
+        if isinstance(new, Model):
             new = new['outputs']
 
         if isinstance(new, Sequence):
@@ -111,7 +110,7 @@ class Graph(MutableMapping):
             # no fancy rewriting here, as the mapping is ambigous
             _new = []
             for n in new:
-                if isinstance(n, Graph):
+                if isinstance(n, Model):
                     _new.extend(sequencefy(n['outputs']))
                 else:
                     _new.append(n)
@@ -172,7 +171,6 @@ class Graph(MutableMapping):
         if append_key is not None:
             self[append_key] += new
 
-
     # Mappings Interface
     # ------------------
 
@@ -191,40 +189,21 @@ class Graph(MutableMapping):
     # visualization interface
     # -----------------------
 
-    def _leaf_formatter(self, variable):
-        """ Takes a Variable and returns a string to describe it.
-
-        This is used for ``str`` and ``repr`` which simply wrap ``theano.gof.graph.as_string``.
-
-        :param variable: Theano Variable to be described
-        """
-        if hasattr(variable, 'name') and variable.name is not None:
-            return variable.name
-        else:
-            return " "
-
-    def _node_formatter(self, apply, input_strings):
-        """ Takes an Op and the list of strings corresponding to its arguments and returns a string to describe it.
-
-        This is used for ``str`` and ``repr`` which simply wrap ``theano.gof.graph.as_string``.
-
-        :param apply: Theano apply node to be described
-        :param input_strings: list of strings describing each input of ``apply``
-        """
-        if hasattr(apply.op, 'name'):
-            return "%s(%s)" % (apply.op.name, ",".join(input_strings))
-        else:
-            return ""
-
     def __str__(self):
-        outputs = self['outputs']
-        if not isinstance(outputs, Sequence):
-            outputs = [outputs]
-        out_strings = gof.graph.as_string(self['inputs'], outputs,
-                                          leaf_formatter=self._leaf_formatter, node_formatter=self._node_formatter)
-        return "[%s]" % ",".join(out_strings)
+        def str_value(v):  # because str(list) does call repr() internally
+            return map(str, v) if isinstance(v, Sequence) else str(v)
+        return json.dumps(fmap(str_value, self), sort_keys=True, indent=2)
 
-    __repr__ = __str__
+        return pformat(
+            '{%s}' % ','.join('%s: %s' % (k, str_v(v)) for k, v in self.iteritems()),
+            indent=2
+        )
+
+    def __repr__(self):
+        return pformat(
+            '{%s}' % ','.join('%s: %s' % (k, repr(v)) for k, v in self.iteritems()),
+            indent=2
+        )
 
 
 """
@@ -237,7 +216,7 @@ def merge_parameters(graphs, key="parameters"):
     """ combines all params, retaining only SharedVariables """
     parameters = []
     for g in graphs:
-        parameters += g['parameters']
+        parameters += g[key]
     return [p for p in parameters if isinstance(p, SharedVariable)]
 
 
@@ -245,31 +224,37 @@ def merge_inputs(graphs, key="inputs"):
     """ combines all inputs, retaining only such with empty owner """
     inputs = []
     for g in graphs:
-        inputs += g['inputs']
+        inputs += g[key]
     return [i for i in inputs if i.owner is None]
 
 
-class Merge(Graph):
+def merge(model_type, *graphs, **kwargs):
+    """ merges references of ``graph`` into ``self`` (cares about duplicates)
 
-    def __init__(self, *graphs, **kwargs):
-        """ merges references of ``graph`` into ``self`` (cares about duplicates)
+    This method is only for convenience and suggestion.
+    Short version::
+    >>> merged_ = {'parameters':merge_parameters(graphs), 'inputs':merge_inputs(graphs)}
+    >>> merged = Model(**update(merged_, graphs[0], overwrite=False)
+    or with alternativ ending
+    >>> merged = Model(**update(dict(graphs[0]), merged_))
+    which is shorter, but with slight copy overhead.
 
-        Parameters
-        ----------
-        graphs : Graph
-            used for further merging
-            first graph is regarded as base graph which additional keys will be used
-        merge_rules: dictionary of functions working on graphs
-            mapping merge_key to merger
-        """
-        merge_rules = kwargs.pop('merge_rules', {'parameters':merge_parameters, 'inputs':merge_inputs})  # python 3 keyword arg alternative
+    Parameters
+    ----------
+    model_type : model class
+        initialized with kwargs
+    graphs : list of Graph
+        used for further merging
+        first graph is regarded as base graph which additional keys will be used
+    merge_rules: dictionary of functions working on graphs
+        mapping merge_key to merger
+    """
+    merge_rules = kwargs.pop('merge_rules', {'parameters':merge_parameters, 'inputs':merge_inputs})  # python 3 keyword arg alternative
 
-        merged = {k:v(graphs) for k, v in merge_rules.iteritems()}
-        update(merged, graphs[0], overwrite=False)
+    merged = {k:v(graphs) for k, v in merge_rules.iteritems()}
+    update(merged, graphs[0], overwrite=False)
 
-        super(Merge, self).__init__(**merged)
-        if hasattr(graphs[0], "__optimizer_premap__"):
-            self.__optimizer_premap__ = graphs[0].__optimizer_premap__
+    return model_type(**merged)
 
 
 
