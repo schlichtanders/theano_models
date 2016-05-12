@@ -4,21 +4,127 @@ from __future__ import division
 
 import numpy as np
 import theano.tensor as T
-from theano import gradient
+from theano import gradient, gof
 from theano import shared, config, grad
 from theano.tensor import nlinalg
+from itertools import izip
 
 from breze.arch.component import transfer as _transfer
+
 from base import merge_parameters, Model
 from util.theano_helpers import softplus
-from models import DeterministicModel
 from placeholders import Placeholder
+from schlichtanders.mydicts import IdentityDict
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 """
+Deterministic Modelling
+=======================
+
+Standard Graphs are deterministic in the sense that they represent functions inputs -> outputs.
+
+Basic Deterministic Model
+-------------------------
+
+In combination with referenced parameters, which are optimizable, we in fact already get a well defined
+deterministically optimizable model
+"""
+
+
+def deterministic_optimizer_premap(distance=None):
+    """ builds premap for a standard deterministic model
+
+    Parameters
+    ----------
+    distance : metric, function working on two lists of theano expressions
+        comparing targets (given as extra input for optimizer) with outputs
+        Defaults to standard square loss.
+
+    Returns
+    -------
+    standard premap for optimizer
+    """
+    if distance is None:
+        def distance(targets, outputs):
+            """ targets and outputs are assumed to be *lists* of theano variables """
+            summed_up = 0
+            n = 0
+            for t, o in izip(targets, outputs):
+                s = (t - o)**2
+                n += s.size
+                summed_up += s.sum()
+            return summed_up / n
+
+    def premap(graph):
+        if isinstance(graph['outputs'], gof.graph.Variable):
+            targets = [graph['outputs'].type()]
+            outputs = [graph['outputs']]
+        else:
+            targets = [o.type() for o in graph['outputs']]
+            outputs = graph['outputs']
+
+        return IdentityDict(
+            lambda key: graph[key],
+            loss_inputs= targets + graph['inputs'],
+            loss= distance(targets, outputs)
+        )
+    return premap
+
+
+class DeterministicModel(Model):
+    """ models prediction of some y (outputs) given some optional xs (inputs)
+
+    hence, loss compares outputs with targets, while outputs depend on some input
+
+    Subclassing Constraints
+    -----------------------
+    As the deterministic model only defines a OptimizableGraph interface, subclasses might want to additionally
+    offer the extended AnnealingOptimizableGraph interface of 'loss_data' and 'loss_regularizer'.
+
+    In order to easily interact with the initilization of a DeterministicModel in a correct way
+    those two parameters should be linked in the Graph itself. Note that in this setting 'loss_inputs' and 'loss'
+    become remapped as in a standard deterministic model, which is usually intended.
+
+    If a complete new interface is wanted, please overwrite __optimizer_premap__ after creating the instance
+    """
+
+    def __init__(self, outputs, parameters, inputs=None, distance=None, **further_references):
+        """ constructs general deterministic model
+
+        Parameters
+        ----------
+        parameters : list of theano expressions
+            parameters to be optimized
+        outputs : list of theano operator or Graph
+            outputs of the model, depending on inputs
+        inputs : list of theano expressions
+            as usual (e.g. data types which the model can use for prediction)
+        distance : metric, function working on two lists of theano expressions
+            comparing targets (given as extra input for optimizer) with outputs
+            Defaults to standard square loss.
+        further_references : kwargs
+            other references
+        """
+        if inputs is None:
+            inputs = []
+
+        super(DeterministicModel, self).__init__(
+            inputs=inputs,
+            outputs=outputs,
+            parameters=parameters,
+            **further_references
+        )
+        # could in principal be called before the constructor, however this order seems to make sense for a postmap:
+        self.add_postmap(deterministic_optimizer_premap(distance))
+
+
+#: alias
+FunctionApproximator = DeterministicModel
+
+"""
 MLP
-===
+---
 """
 
 
@@ -80,7 +186,7 @@ class Mlp(DeterministicModel):
 
 """
 Invertible Models
-=================
+-----------------
 
 E.g. useful to transform probability distributions. See ``NormalizingFlow`` within ``probabilistic_models``.
 """
