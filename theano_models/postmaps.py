@@ -121,12 +121,12 @@ def variational_postmap(model):
 
 
 """
-numericalization postmaps
--------------------------
+Numerical Postmaps
+------------------
 """
 
 
-def numerical_parameters(model):
+def _numerical_parameters(model):
     """ standard remap for accessing shared theano parameters
 
     if graph['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
@@ -145,7 +145,7 @@ def numerical_parameters(model):
     return np.array(num_parameters)  # default to numpy type, as this supports numeric operators like indented
 
 
-def numericalize(model, loss_reference_name, d_order=0):
+def _numericalize(model, loss_reference_name, d_order=0):
     """ numericalizes ``graph[loss_reference_name]`` or the respective derivative of order ``d_order``
 
     It works analogously to ``numerical_parameters`` in that it handles singleton cases or otherwise reshapes flattened
@@ -215,22 +215,22 @@ def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}
 
     def lazy_numericalize(key):
         if not annealing:
-            return numericalize(model, "loss", d_order=d_order[key])
+            return _numericalize(model, "loss", d_order=d_order[key])
         else:
             return (
-                numericalize(model, "loss_data", d_order=d_order[key]),
-                numericalize(model, "loss_regularizer", d_order=d_order[key])
+                _numericalize(model, "loss_data", d_order=d_order[key]),
+                _numericalize(model, "loss_regularizer", d_order=d_order[key])
             )
 
     return DefaultDict(  # DefaultDict will save keys after they are called the first time
         lambda key: wrapper(lazy_numericalize(key), **wrapper_kwargs),
-        num_parameters=numerical_parameters(model)
+        num_parameters=_numerical_parameters(model)
     )
 
 
 """
-concrete numeric optimizer
---------------------------
+Concrete Numeric Optimizer Postmaps
+-----------------------------------
 """
 
 
