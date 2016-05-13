@@ -4,6 +4,7 @@ from __future__ import division
 
 import numpy as np
 import theano.tensor as T
+import theano
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
@@ -11,7 +12,7 @@ from base import Model
 from postmaps import probabilistic_optimizer_postmap, variational_postmap
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
-from util import shared
+from util import as_tensor_variable
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -225,14 +226,14 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
 
     Y['loglikelihood'] = Y['logP']
     if "n_data" not in Y:
-        Y['n_data'] = shared(1)  # needs to be updated externally
+        Y['n_data'] = theano.shared(1)  # needs to be updated externally, therefore real theano.shared variable
 
     Y[randomize_key] = Xs  # e.g. make original parameters random
 
     def variational_lower_bound(RV):
         return Y['loglikelihood'](RV) - 1/Y['n_data'] * kl_prior
     Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
-    Y.set_postmap(variational_postmap)
+    return Y.replace_postmap(probabilistic_optimizer_postmap, variational_postmap)  # returns flag whether something was replaced
 
 
 """
@@ -287,7 +288,7 @@ class DiagGaussianNoise(ProbabilisticModel):
             # TODO ensure that input does not get another shape!!!
 
         self.rng = RandomStreams() if rng is None else rng
-        self.var = shared(init_var, name="var")  # may use symbolic shared variable
+        self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
         noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         RV = input + T.sqrt(self.var) * noise
@@ -367,7 +368,7 @@ class DiagGauss(ProbabilisticModel):
 
         # main part
         # ---------
-        self.mean = shared(init_mean, "mean")  # TODO broadcastable?
+        self.mean = as_tensor_variable(init_mean, "mean")  # TODO broadcastable?
         dgn = DiagGaussianNoise(self.mean, init_var, rng)
         self.var = dgn.var
 
@@ -419,8 +420,8 @@ class Uniform(ProbabilisticModel):
 
         self.rng = RandomStreams() if rng is None else rng
 
-        self.start = shared(init_start, "start")  # TODO broadcastable?
-        self.offset = shared(init_offset, "offset")  # TODO broadcastable?
+        self.start = as_tensor_variable(init_start, "start")  # TODO broadcastable?
+        self.offset = as_tensor_variable(init_offset, "offset")  # TODO broadcastable?
 
         noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         RV = noise * self.offset + self.start

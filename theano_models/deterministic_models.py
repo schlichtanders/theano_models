@@ -11,9 +11,9 @@ from itertools import izip
 
 from breze.arch.component import transfer as _transfer
 
-from base import merge_parameters, Model
+from base import Model
 from postmaps import deterministic_optimizer_postmap
-from util import softplus, shared
+from util import softplus, as_tensor_variable, merge_parameters
 from placeholders import Placeholder
 
 
@@ -70,9 +70,6 @@ class DeterministicModel(Model):
         self.set_postmap(deterministic_optimizer_postmap)
 
 
-#: alias
-FunctionApproximator = DeterministicModel
-
 """
 MLP
 ---
@@ -95,8 +92,9 @@ class AffineNonlinear(DeterministicModel):
         except (TypeError, AttributeError):
             self.transfer = transfer
 
-        self.weights = shared(T.zeros((input.size, output_size)), "weights")
-        self.bias = shared(np.zeros(output_size), "bias")
+        self.weights = T.zeros((input.size, output_size))
+        self.weights.name = "weights"
+        self.bias = as_tensor_variable(np.zeros(output_size), "bias")
 
         output = self.transfer(T.dot(input, self.weights) + self.bias)
 
@@ -248,9 +246,11 @@ class PlanarTransform(InvertibleModel):
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
-        self.b = shared(0, "b")
-        self.w = shared(T.ones(input.shape, dtype=config.floatX), "w")
-        self._u = shared(T.zeros(input.shape, dtype=config.floatX), "_u")
+        self.b = as_tensor_variable(0, "b")
+        self.w = T.ones(input.shape)
+        self.w.name = "w"
+        self._u = T.zeros(input.shape)
+        self._u.name = "_u"
         # this seems not reversable that easily:
         self.u = self._u + (softplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
         # HINT: this softplus might in fact refer to a simple positive parameter, however the formula seems more complex
@@ -291,16 +291,15 @@ class RadialTransform(InvertibleModel):
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
-        self.alpha = shared(init_alpha, "alpha")
-        self.beta_plus_alpha = shared(init_alpha + init_beta, "beta+alpha")
+        self.alpha = as_tensor_variable(init_alpha, "alpha")
+        self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, "beta+alpha")
         self.beta = self.beta_plus_alpha - self.alpha
         self.beta.name = "beta"
 
         if init_z0 is None:
-            self.z0 = shared(T.zeros(input.shape))
+            self.z0 = T.zeros(input.shape)
         else:
-            self.z0 = shared(init_z0)
-
+            self.z0 = as_tensor_variable(init_z0)
         self.z0.name = "z0"
 
         r = (input - self.z0).norm(2)

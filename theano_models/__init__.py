@@ -1,6 +1,10 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-from base import Model, merge, merge_parameters, merge_inputs, reparameterize_map, flatten_parameters
+
+#: replaces ``shared`` in this framework:
+from theano.tensor.basic import as_tensor_variable
+
+from base import Model, reset_eval
 from placeholders import Placeholder
 
 import util
@@ -11,6 +15,5 @@ import data
 
 # important class methods:
 from deterministic_models import InvertibleModel
-from util.theano_helpers import update_all_symbolic_var, symbolic_shared_variables
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
