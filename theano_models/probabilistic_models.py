@@ -11,7 +11,7 @@ from base import Model
 from postmaps import probabilistic_optimizer_postmap, variational_postmap
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
-from util.theano_helpers import shared
+from util import shared
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -29,35 +29,14 @@ the same theano type). The crucial different is that when called(/executed) agai
 return different outputs. (think of a random variables as a sampler essentially).
 
 For doing all the math part correctly, it is however not enough to have a sampler as a random variable (RV), one also
-needs information about the distribution from which the RV samples. It turns out, that it is not trivial to express
-the probability distribution in theano. We want a probability distribution to be
-    1. a theano expression
-    2. automatically differentiable (Theano grad)
-    3. automatically substitutable (Graph)
-    4. be transformable into a function, returning the density/probability value for a certain random variable
-The crucial point is, how to denote the random variable within the probability distribution to ensure the four points
-above.
-The naive guess, that one could simply use the sampler random variable within the probability distribution (P)
-revealed to kick (2) (e.g. RV = mean + noise, P = abs(RV - mean).sum() makes it clear, that P is not differentiable
-with respect to mean if RV is used directly).
-Using a function rv -> P(rv)  kicks (1) and (3).
-Using a tuple/list [rv, P] kicks (1) and (3) (I think (3) could even work given the current rigorous implementation of
-substitute, looks however a bit more like magic)
-
-The solution we came up with is twofold:
-1.  In a ProbabilisticModel itself, the rv of the probability distribution P gets a extra reference called "P_RV"
-    and can be cleanly substituted like any other graph reference by ``graph['P_RV'] = replacement``.
-    "P" refers to the complete scalar theano expression.
-    "RV" and "outputs" refer both to the sampler.
-
-2.  In addition, as an function argument, you can also pass a function P: rv -> P(rv) giving the distribution function.
-    Of course, this makes only sense if no full ProbabilisticModel is needed (i.e. no sampler, but only distribution
-    function, for instance). This revealed to be intuitive and straightforward.
+needs information about the distribution from which the RV samples.
+We represent a distribution by a function logP: rv -> logP(rv), where logP stands for logarithmic probability. We need
+logarithmic scale for numerical issues.
 
 Note, that theano makes it easy to optimize with this kind of structure. A random variable 'RV' can itself be a more
 complex theano expression, for which e.g. shared parameter gradients can be automatically inferred by theano.
-Updating these shared parameters with an optimizer automatically updates also the distribution 'P', as it must depend
-on the very same parameters.
+Updating these shared parameters (e.g. within an optimizer) automatically updates also the distribution 'logP', as it
+must depend on the very same parameters.
 
 
 Basic Probabilistic Model
@@ -92,18 +71,6 @@ class ProbabilisticModel(Model):
     In a respective probabilistic model, the output is now a *random* variable y, i.e. instead of a prediction,
     a distribution over predictions is returned.
     Both models can depend on some extra inputs (deterministic in both models).
-
-
-    Subclassing Constraints
-    -----------------------
-    As the probabilistic model only defines a OptimizableGraph interface, subclasses might want to additionally
-    offer the extended AnnealingOptimizableGraph interface of 'loss_data' and 'loss_regularizer'.
-
-    In order to easily interact with the initilization of a ProbabilisticModel in a correct way
-    those two parameters should be linked in Graph itself. Note that in this setting 'loss_inputs' and 'loss' become
-    remapped as in a standard probabilistic model.
-
-    If a complete new interface is wanted, please overwrite __optimizer_premap__ after creating the instance
     """
 
     def __init__(self, RV, logP, parameters, inputs=None, **further_references):
@@ -214,7 +181,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
         prior probability distribution of the weights (lists must match Ws and Y[randomize_key])
         Different list entries are supposed to be independent.
 
-    kl_prior : theano expression or Graph (if parameters need to be merged)
+    kl_prior : theano expression or Model (if parameters need to be merged)
         kullback leibler divergence KL(X.P||prior). This does not depend any long on X if I understood it correctly,
         but only on hyperparameters.
     """

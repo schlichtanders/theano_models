@@ -18,26 +18,23 @@ Placeholder Extension
 
 On top of the above core implementation, the module supports a ``Placeholder`` class which can build abstract operators
 to be used exactly like ``+, -, *, /, **, T.dot, T.log, T.exp, ...``.
-These placeholder operators correspond directly to functions, i.e. to theano ``Graph``s.
+These placeholder operators correspond directly to functions, i.e. also to theano ``Model``s.
 
 Placeholder operators can be kept abstract to build up more complex abstract theano expressions. Of course, such
-abstract expressions are not executable, so remember to first replace all placeholders with concrete ``Graph``s.
-
-For convenience, the module also offers a ``PlaceholderGraph`` which integrates ``Graph`` and ``Placeholder`` a bit
-tighter.
+abstract expressions are not executable, so remember to first replace all placeholders with concrete ``Model``s.
 
 
 Example::
 
     import theano.tensor as T
     from theano.printing import debugprint
-    from theano_placeholders import ReferencedTheanoGraph, Graph, Placeholder
+    from theano_placeholders import Model, Placeholder
 
     x = T.dscalar('x')
     y = T.dscalar('y')
 
-    plus = ReferencedTheanoGraph([x + y])
-    minus = Graph([x - y])  # `Graph` is short for `ReferencedTheanoGraph`
+    plus = Model([x + y])
+    minus = Model([x - y])
 
     op_model1 = Placeholder("model1", itypes=[T.dscalar, T.dscalar], otypes=[T.dscalar])
     op_model2 = Placeholder("model2", itypes=[T.dscalar, T.dscalar], otypes=[T.dscalar])
@@ -72,7 +69,7 @@ class Placeholder(theano.Op, Sequence):
     and secondly, it has a list-like interface to access all subsequent replacements
     (the replacements are automatically collected - see ``Placeholder.replace`` for how to elicit an replacement)
 
-    This is useful for prestructuring very big graphs.
+    This is useful for prestructuring very big models.
     - You can easily visualizing abstract layers (like visualizing a normal theano expression)
     - You can have placeholders which are abstract in the sense, that depending on your context you replace the
       it with a respective replacement.
@@ -122,7 +119,7 @@ class Placeholder(theano.Op, Sequence):
         raise NotImplementedError("This is only a placeholder OP. It cannot be executed until replaced.")
 
     # TODO here further. ASK WHETHER GRADIENTS HAVE ALWAYS SAME TYPE SIGNATURE AS MAIN OPERATOR
-    # use theano.grad(cost=None, wrt=graph[inputs], known_gradients = OrderedDict(zip(graph[outputs], output_gradients)))
+    # use theano.grad(cost=None, wrt=model[inputs], known_gradients = OrderedDict(zip(model[outputs], output_gradients)))
     '''
     def grad(self, inputs, output_gradients):
         """ returns symbolic placeholder gradient """
@@ -137,12 +134,12 @@ class Placeholder(theano.Op, Sequence):
     # Placeholder logic
     # -----------------
 
-    def replace(self, graph, outputs, inputs=None, collecting_replacements=True):
+    def replace(self, model, outputs, inputs=None, collecting_replacements=True):
         """ This replaces every occurrence of the placeholder operator in outputs with a copy of refgraph
 
         Parameters
         ----------
-        graph : Graph
+        model : Model
             placeholder replacement (will be copied)
         outputs: list of theano expressions
             specifies theano graph where to replace placeholder (inplace)
@@ -153,41 +150,41 @@ class Placeholder(theano.Op, Sequence):
         """
         inputs = gof.graph.inputs(outputs) if inputs is None else inputs
 
-        new_graphs = []
+        new_models = []
 
         # check same operator inputs/outputs
-        assert len(self.itypes) == len(graph['inputs'])
-        assert all(inp.type == it for inp, it in zip(graph['inputs'], self.itypes))
+        assert len(self.itypes) == len(model['inputs'])
+        assert all(inp.type == it for inp, it in zip(model['inputs'], self.itypes))
 
-        assert len(self.otypes) == len(graph['outputs'])
-        assert all(out.type == ot for out, ot in zip(graph['outputs'], self.otypes))
+        assert len(self.otypes) == len(model['outputs'])
+        assert all(out.type == ot for out, ot in zip(model['outputs'], self.otypes))
 
         for apply in gof.graph.list_of_nodes(inputs, outputs):
             if apply.op is self:
-                graph_copy = deepcopy(graph)
+                model_copy = deepcopy(model)
 
-                graph_copy.substitute_key('inputs', apply.inputs)
+                model_copy.substitute_key('inputs', apply.inputs)
                 # TODO BUG - owner.outputs are not updated
-                # apply.outputs are all within one list, however graph_copy['outputs'] might refer to several
+                # apply.outputs are all within one list, however model_copy['outputs'] might refer to several
                 # different owners (Applys)
 
                 grouped_by_owner = itt.groupby(
-                    zip(apply.outputs, graph_copy['outputs']),
+                    zip(apply.outputs, model_copy['outputs']),
                     key=lambda t:t[1].owner
                 )
                 for owner, owner_outputs in grouped_by_owner:
-                    apply_outs, graph_outs = zip(*owner_outputs)
+                    apply_outs, model_outs = zip(*owner_outputs)
                     for o in apply_outs:
                         o.owner = owner
                     owner.outputs = apply_outs
-                # change outputs in graph to point to old_o
-                graph_copy['outputs'] = apply.outputs
+                # change outputs in model to point to old_o
+                model_copy['outputs'] = apply.outputs
 
-                new_graphs.append(graph_copy)
+                new_models.append(model_copy)
 
         if collecting_replacements:
-            self.replacements += new_graphs
-        return new_graphs
+            self.replacements += new_models
+        return new_models
 
 
     # Sequence interface

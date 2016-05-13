@@ -16,9 +16,10 @@ from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update
 from schlichtanders.myfunctools import Compose, I, fmap
-from schlichtanders.mylists import sequencefy
+from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
-from util.theano_helpers import complex_reshape, SymbolicSharedVariable, shared
+from util import complex_reshape, shared
+from util.theano_helpers import symbolic_shared_variables
 from pprint import pformat
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -34,13 +35,13 @@ class Model(MutableMapping):
 
     The two basic references are 'inputs' and 'outputs'. This mirrors the core idea of this class, nameley
     to have a more abstract equivalent to theano.function(inputs, outputs).
-    With this, Graphs are intended to be composable, namely by mapping ``graph1['outputs'] -> graph2['inputs']``
+    With this, Models are intended to be composable, namely by mapping ``model1['outputs'] -> model2['inputs']``
     and so on.
     """
 
     def __init__(self, outputs, inputs=None, **further_references):
         """
-        Constructs a Graph by directly referencing outputs and inputs, and further_references
+        Constructs a Model by directly referencing outputs and inputs, and further_references
         It does essentially nothing, but gives them a summarizing class interface.
 
         Parameters
@@ -81,7 +82,7 @@ class Model(MutableMapping):
         return self._postmap(self, **kwargs)
 
     def set_postmap(self, postmap):
-        self._postmap = postmap
+        self._postmap = Compose(postmap)
 
     def add_postmap(self, postmap, call_first=False):
         """ combines existing postmap with new postmap """
@@ -109,7 +110,7 @@ class Model(MutableMapping):
             new = new['outputs']
 
         if isinstance(new, Sequence):
-            # if there are graphs, recognize them and use there outputs
+            # if there are models, recognize them and use there outputs
             # no fancy rewriting here, as the mapping is ambigous
             _new = []
             for n in new:
@@ -120,6 +121,7 @@ class Model(MutableMapping):
             new = _new
         # no Sequence, try FANCY REWRITING
         elif hasattr(new, 'broadcastable') and new.broadcastable == (False,):  # vector type of arbitrary dtype
+            print "fancy reshaping"
             new = list(complex_reshape(new, old))
         else:
             singleton = True
@@ -204,48 +206,46 @@ Merge
 """
 
 
-def merge_parameters(graphs, key="parameters"):
+def merge_parameters(models, key="parameters"):
     """ combines all params, retaining only SharedVariables """
     parameters = []
-    for g in graphs:
+    for g in models:
         parameters += g[key]
     return [p for p in parameters if isinstance(p, SharedVariable)]
 
 
-def merge_inputs(graphs, key="inputs"):
+def merge_inputs(models, key="inputs"):
     """ combines all inputs, retaining only such with empty owner """
     inputs = []
-    for g in graphs:
+    for g in models:
         inputs += g[key]
     return [i for i in inputs if i.owner is None]
 
 
-def merge(model_type, *graphs, **kwargs):
-    """ merges references of ``graph`` into ``self`` (cares about duplicates)
-
-    This method is only for convenience and suggestion.
+def merge(model_type, *models, **kwargs):
+    """ This method is only for convenience and suggestion.
     Short version::
-    >>> merged_ = {'parameters':merge_parameters(graphs), 'inputs':merge_inputs(graphs)}
-    >>> merged = Model(**update(merged_, graphs[0], overwrite=False)
+    >>> merged_ = {'parameters':merge_parameters(models), 'inputs':merge_inputs(models)}
+    >>> merged = Model(**update(merged_, models[0], overwrite=False)
     or with alternativ ending
-    >>> merged = Model(**update(dict(graphs[0]), merged_))
+    >>> merged = Model(**update(dict(models[0]), merged_))
     which is shorter, but with slight copy overhead.
 
     Parameters
     ----------
     model_type : model class
         initialized with kwargs
-    graphs : list of Graph
+    models : list of Model
         used for further merging
-        first graph is regarded as base graph which additional keys will be used
-    merge_rules: dictionary of functions working on graphs
+        first model is regarded as base model which additional keys will be used
+    merge_rules: dictionary of functions working on models
         mapping merge_key to merger
     """
-    merge_rules = kwargs.pop('merge_rules', {'parameters':merge_parameters, 'inputs':merge_inputs})  # python 3 keyword arg alternative
+    merge_rules = kwargs.pop('merge_rules', {'parameters': merge_parameters, 'inputs': merge_inputs})  # python 3 keyword arg alternative
 
-    merged = {k:v(graphs) for k, v in merge_rules.iteritems()}
-    update(merged, graphs[0], overwrite=False)
-
+    merged = {k: m(models) for k, m in merge_rules.iteritems()}
+    update(merged, models[0], overwrite=False)
+    fmap(remove_duplicates, merged)
     return model_type(**merged)
 
 
@@ -259,7 +259,7 @@ reparameterization
 def reparameterize_map(f, finv):
     """
     use e.g. like
-    >>> graph.map("parameters_positive", reparameterize_map(softplus, softplusinv), "parameters")
+    >>> model.map("parameters_positive", reparameterize_map(softplus, softplusinv), "parameters")
 
     Parameters
     ----------
@@ -273,8 +273,8 @@ def reparameterize_map(f, finv):
         mappable function
     """
     def reparameterize(sv):
-        if isinstance(sv, SymbolicSharedVariable):
-            ret = shared(finv(sv.symbol, module=T))
+        if sv in symbolic_shared_variables:
+            ret = shared(finv(symbolic_shared_variables[sv], module=T))
         else:
             ret = shared(finv(sv.get_value(), module=np))
         ret.name = sv.name + "_" + f.func_name
@@ -285,16 +285,17 @@ def reparameterize_map(f, finv):
     return reparameterize
 
 
-def flatten_parameters(graph):
-    values = [p.get_value(borrow=True) for p in graph['parameters']]
+def flatten_parameters(model):
+    names = [p.name if p.name is not None else "_" for p in model['parameters']]
+    values = [p.get_value(borrow=True) for p in model['parameters']]  # borrow=True is only faster
     values_flat = np.empty((sum(v.size for v in values),))
-    parameters_flat = shared(values_flat, dtype=config.floatX, borrow=True)
+    parameters_flat = shared(values_flat, borrow=True)
     i = 0
-    for p, v in zip(graph['parameters'], values):
+    for p, v in zip(model['parameters'], values):
         values_flat[i:i + v.size] = v.flat
-        new_p = parameters_flat[i:i + v.size].reshape(v.shape)
+        new_p = parameters_flat[i:i + p.size].reshape(p.shape)
         proxify(p, new_p)  # p.set_value(, borrow=True)
         i += v.size
-
-    del graph['parameters']
-    graph['parameters'] = [parameters_flat]
+    parameters_flat.name = ":".join(names)
+    del model['parameters']
+    model['parameters'] = [parameters_flat]

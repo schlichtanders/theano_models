@@ -2,100 +2,25 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 from six import integer_types
-from collections import Sequence
-from itertools import izip
+from collections import Sequence, OrderedDict
 
-import theano.tensor as T
 import theano
 from theano import config
 from theano.tensor.basic import TensorType, as_tensor_variable
 from theano.gof import Variable, utils
 from theano.tensor.sharedvar import TensorSharedVariable, tensor_constructor
+from theano.compile.sharedvalue import SharedVariable
 import numpy
 import numpy as np
+import warnings
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
-
-"""
-general helpers
-===============
-"""
-
-"""
-reparameterization helpers
---------------------------
-"""
-
-
-def softplus(x, module=T):
-    return module.log(module.exp(x) + 1)
-
-
-def softplus_inv(y, module=np):
-    return module.log(module.exp(y) - 1)
-
-
-"""
-norms and distances
--------------------
-"""
-
-def L1(parameters):
-    summed_up = 0
-    n = 0
-    for p in parameters:
-        n += p.size
-        summed_up += abs(p).sum()
-    return summed_up / n
-
-
-def L2(parameters):
-    summed_up = 0
-    n = 0
-    for p in parameters:
-        n += p.size
-        summed_up += (p**2).sum()
-    return summed_up / n
-
-def norm_distance(norm=L2):
-    def distance(targets, outputs):
-        """ targets and outputs are assumed to be *lists* of theano variables """
-        return norm([t - o for t, o in izip(targets, outputs)])
-
-
-"""
-reshape helpers
----------------
-"""
-
-def total_size(variables):
-    return sum(v.size for v in variables)
-
-
-def complex_reshape(vector, variables):
-    """ reshapes vector into elements with shapes like variables
-
-    Parameters
-    ----------
-    vector : list
-        shall be reshaped
-    variables : list of theano variables
-        .size and .shape will be used to reshape vector appropriately
-
-    Returns
-    -------
-        reshaped parts of the vector
-    """
-    # NOTE: this only works with ConstantShapeSharedVariables, as usually when ``variables`` get proxified, also the old shape refers to the new variables
-    i = 0
-    for v in variables:
-        yield vector[i:i+v.size].reshape(v.shape)
-        i += v.size
 
 """
 theano graph helpers
 --------------------
 """
+
 
 def gen_nodes(initial_variables, filter=lambda n:True):
     for v in initial_variables:
@@ -117,7 +42,7 @@ def gen_variables(initial_variables, filter=lambda v:v.owner is None):
 
 """
 shared redefined
-================
+----------------
 
 with some additional convenience wrappers
 """
@@ -237,7 +162,7 @@ def scalartensor_constructor(value, name=None, strict=False, allow_downcast=None
                                   and not isinstance(value[0], Sequence) and not check_type(value[0])):
         raise TypeError()
 
-    value = numpy.array(value, copy=(not borrow))
+    value = numpy.array(value, dtype=config.floatX, copy=(not borrow))
 
     # if no broadcastable is given, then the default is to assume that
     # the value might be resized in any dimension in the future.
@@ -245,7 +170,6 @@ def scalartensor_constructor(value, name=None, strict=False, allow_downcast=None
     if broadcastable is None:
         broadcastable = (False,) * len(value.shape)
     type = TensorType(config.floatX, broadcastable=broadcastable)
-    value = value.astype(config.floatX)
     # constant_shape = as_tensor_variable(value.shape)
     # TODO this gives a TheanoConstant, however the internal code requires either TheanoVariable or Tuple or List - Bug?
     # hence, use value.shape directly for now
@@ -258,7 +182,7 @@ def scalartensor_constructor(value, name=None, strict=False, allow_downcast=None
         constant_shape=value.shape,
     )
 
-
+'''
 class SymbolicSharedVariable(TensorSharedVariable):
     """ supports shape information """
     UNEVALUATED = []
@@ -296,7 +220,12 @@ class SymbolicSharedVariable(TensorSharedVariable):
     @classmethod
     def evaluate_all_unevaluated(cls, inputs_to_values):
         while cls.UNEVALUATED:
-            cls.UNEVALUATED[0].eval(inputs_to_values)
+            try:
+                cls.UNEVALUATED[0].eval(inputs_to_values)
+            except AttributeError as e:
+                warnings.warn("ignored AttributeError, as this seems to happen because of theanos internal copy system "
+                              "which re-generates variables again and again, however incomplete versions")
+                del cls.UNEVALUATED[0]
 
 
 @shared_constructor
@@ -337,7 +266,86 @@ def symbol_constructor(value, name=None, strict=False, allow_downcast=None,
         symbol=symbol,
         symbol_shape=symbol.shape
     )
+'''
+
+symbolic_shared_variables = {}
+
+@shared_constructor
+def symbol_constructor2(value, name=None, strict=False, allow_downcast=None,
+                       borrow=False, broadcastable=None, target='cpu'):
+
+    """
+    SharedVariable Constructor for TensorType.
+
+    Notes
+    -----
+    Regarding the inference of the broadcastable pattern...
+    The default is to assume that the value might be resized in any
+    dimension, so the default broadcastable is ``(False,)*len(value.shape)``.
+    The optional `broadcastable` argument will override this default.
+
+    """
+    if target != 'cpu':
+        raise TypeError('not for cpu')
+
+    if not isinstance(value, theano.gof.Variable):
+        raise TypeError()
+    symbol = value
+
+    # if no broadcastable is given, then the default is to assume that
+    # the value might be resized in any dimension in the future.
+    #
+    if broadcastable is None:
+        broadcastable = value.type.broadcastable
+    type = TensorType(config.floatX, broadcastable=broadcastable)  # use given broadcastable alternatively
+    value = np.zeros((1,) * len(broadcastable), dtype=config.floatX)
+    new_shared_variable = ConstantShapeTensorSharedVariable(
+        type=type,
+        value=numpy.array(value, copy=(not borrow)),
+        name=name,
+        strict=strict,
+        allow_downcast=allow_downcast,
+        constant_shape=symbol.shape
+    )
+    symbolic_shared_variables[new_shared_variable] = symbol
+    return new_shared_variable
 
 
-#: convenience alias as long as symbolic variables are prefiltered
-sshared = symbol_constructor
+def update_symbolic_var(sym_var, inputs_to_values=None):
+    if not isinstance(sym_var, TensorSharedVariable):  # reference changed type
+        del symbolic_shared_variables[sym_var]
+        return
+    symbol = symbolic_shared_variables[sym_var]
+    for sub_sym_var in gen_variables([symbol], filter=lambda v: v in symbolic_shared_variables):
+        update_symbolic_var(sub_sym_var, inputs_to_values)  # this goes recursively until the end
+    value = symbol.eval(inputs_to_values).astype(config.floatX)
+    sym_var.set_value(value, borrow=True)
+    return value
+
+
+def _sort_all_symbolic_var(sorted_keys, current_keys):
+    # first sort them, so that those without dependencies are first and later only depends on earlier
+    for sym_var in current_keys:
+        if sym_var in sorted_keys:
+            continue
+        elif not isinstance(sym_var, SharedVariable):  # reference changed type
+            del symbolic_shared_variables[sym_var]
+            continue
+        symbol = symbolic_shared_variables[sym_var]
+        sub_sym_vars = list(gen_variables([symbol], filter=lambda v: v in symbolic_shared_variables and v not in sorted_keys))
+        _sort_all_symbolic_var(sorted_keys, sub_sym_vars)  # this goes recursively until the end
+        sorted_keys.append(sym_var)
+
+
+def update_all_symbolic_var(inputs_to_values):
+    sorted_keys = []
+    _sort_all_symbolic_var(sorted_keys, symbolic_shared_variables.keys())
+
+    for sym_var in sorted_keys:
+        symbol = symbolic_shared_variables[sym_var]
+        value = symbol.eval(inputs_to_values).astype(config.floatX)
+        sym_var.set_value(value, borrow=True)
+
+
+
+# TODO rebuild theano_models such that no shared variables are used in first instance. replace ``shared`` with ``as_tensor_variable``

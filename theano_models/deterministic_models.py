@@ -13,7 +13,7 @@ from breze.arch.component import transfer as _transfer
 
 from base import merge_parameters, Model
 from postmaps import deterministic_optimizer_postmap
-from util.theano_helpers import softplus, shared
+from util import softplus, shared
 from placeholders import Placeholder
 
 
@@ -24,7 +24,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 Deterministic Modelling
 =======================
 
-Standard Graphs are deterministic in the sense that they represent functions inputs -> outputs.
+Standard Models are deterministic in the sense that they represent functions inputs -> outputs.
 
 Basic Deterministic Model
 -------------------------
@@ -38,17 +38,6 @@ class DeterministicModel(Model):
     """ models prediction of some y (outputs) given some optional xs (inputs)
 
     hence, loss compares outputs with targets, while outputs depend on some input
-
-    Subclassing Constraints
-    -----------------------
-    As the deterministic model only defines a OptimizableGraph interface, subclasses might want to additionally
-    offer the extended AnnealingOptimizableGraph interface of 'loss_data' and 'loss_regularizer'.
-
-    In order to easily interact with the initilization of a DeterministicModel in a correct way
-    those two parameters should be linked in the Graph itself. Note that in this setting 'loss_inputs' and 'loss'
-    become remapped as in a standard deterministic model, which is usually intended.
-
-    If a complete new interface is wanted, please overwrite __optimizer_premap__ after creating the instance
     """
 
     def __init__(self, outputs, parameters, inputs=None, **further_references):
@@ -58,7 +47,7 @@ class DeterministicModel(Model):
         ----------
         parameters : list of theano expressions
             parameters to be optimized
-        outputs : list of theano operator or Graph
+        outputs : list of theano operator or Model
             outputs of the model, depending on inputs
         inputs : list of theano expressions
             as usual (e.g. data types which the model can use for prediction)
@@ -141,7 +130,7 @@ class Mlp(DeterministicModel):
 
         super(Mlp, self).__init__(
             inputs=[input],
-            outputs=layer,  # same as layer['outputs'] at this place, as Graph automatically handles isinstance(outputs,Graph)
+            outputs=layer,  # same as layer['outputs'] at this place, as Model automatically handles isinstance(outputs,Model)
             parameters=merge_parameters(self.layers)
         )
 
@@ -158,7 +147,7 @@ class InvertibleModel(DeterministicModel):
 
     INVERTIBLE_MODELS = []
 
-    def __init__(self, inputs, outputs, parameters, inverse=None, inverse_inputs=None, norm_det=None):
+    def __init__(self, inputs, outputs, parameters, inverse_outputs=None, inverse_inputs=None, norm_det=None, **further_references):
         # TODO support multiple inputs
         """
         Parameters
@@ -169,7 +158,7 @@ class InvertibleModel(DeterministicModel):
             like usual
         parameters : list of theano expressions
             like usual
-        inverse : function (or theano expression, but then 'input_inverse' needs to be given)
+        inverse_outputs : function (or theano expression, but then 'input_inverse' needs to be given)
             expression which inverses outputs
         inverse_inputs : single theano variable
             input of inverse (if inverse is function, this is automatically constructed)
@@ -178,18 +167,16 @@ class InvertibleModel(DeterministicModel):
             can be automatically derived, however sometimes a more efficient version is known
             (alternatively you can improve theanos optimizers)
         """
-        if inverse is None:
+        if inverse_outputs is None:
             # make pseudo inverse (will work like a function):
-            inverse = Placeholder("inverse", itypes=[outputs.type], otypes=[i.type for i in inputs])
-            inverse.f_inputs = inputs
-            inverse.f_outputs = outputs
+            inverse_outputs = Placeholder("inverse", itypes=[outputs.type], otypes=[i.type for i in inputs])
+            inverse_outputs.f_inputs = inputs
+            inverse_outputs.f_outputs = outputs
 
-        if hasattr(inverse, '__call__'):
+        if hasattr(inverse_outputs, '__call__'):
             # TODO currently only single output is supported
             inverse_inputs = [outputs.type(name="inverse_inputs")]
-            inverse_outputs = inverse(*inverse_inputs)
-        else:
-            inverse_outputs = inverse
+            inverse_outputs = inverse_outputs(*inverse_inputs)
 
         inverse_outputs.name = "inverse_outputs"
         inputs[0].name = "f_inputs"
@@ -206,7 +193,8 @@ class InvertibleModel(DeterministicModel):
             parameters=parameters,
             inverse_outputs=inverse_outputs,
             inverse_inputs=inverse_inputs,
-            norm_det=norm_det
+            norm_det=norm_det,
+            **further_references
         )
         InvertibleModel.INVERTIBLE_MODELS.append(self)
 
@@ -216,7 +204,7 @@ class InvertibleModel(DeterministicModel):
             inputs=self['inverse_inputs'],
             outputs=self['inverse_outputs'],
             inverse_inputs=self['inputs'],
-            inverse=self['outputs'],
+            inverse_outputs=self['outputs'],
             parameters=self['parameters'],
         )
 
@@ -312,7 +300,7 @@ class RadialTransform(InvertibleModel):
             self.z0 = shared(T.zeros(input.shape))
         else:
             self.z0 = shared(init_z0)
-            size = len(init_z0)
+
         self.z0.name = "z0"
 
         r = (input - self.z0).norm(2)
@@ -320,7 +308,7 @@ class RadialTransform(InvertibleModel):
         dh = grad(h, r)
 
         f = input + self.beta * h * (input - self.z0)
-        norm_det = (1 + self.beta*h)**(size - 1) * (1 + self.beta * h + self.beta * dh * r)
+        norm_det = (1 + self.beta*h)**(input.size - 1) * (1 + self.beta * h + self.beta * dh * r)
 
         def inverse(f):
             _lhs = (f - self.z0).norm(2)  # equation (26)
@@ -336,5 +324,5 @@ class RadialTransform(InvertibleModel):
             parameters=[self.z0],
             parameters_positive=[self.alpha, self.beta_plus_alpha],  # Constraint for invertibility
             norm_det=norm_det,
-            inverse=inverse,
+            inverse_outputs=inverse,
         )

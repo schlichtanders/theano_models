@@ -11,7 +11,7 @@ from schlichtanders.mydicts import IdentityDict, DefaultDict
 from schlichtanders.mylists import deepflatten
 from schlichtanders.mynumpy import complex_reshape
 
-from util.theano_helpers import norm_distance, L2
+from util import norm_distance, L2
 
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -20,7 +20,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 """
 Postmaps
 ========
-Postmaps are meant to be applied just before the graph is used somewhere else, e.g. within an optimizer
+Postmaps are meant to be applied just before the model is used somewhere else, e.g. within an optimizer
 (Note, until now all postmaps are used for interfacing the optimizers).
 As a model is essentially a dictionary, postmaps are mapping a dictionary to a new dictionary. Hence, they are
 composable, which is included used in the base implementation of Model.
@@ -49,7 +49,7 @@ def deterministic_optimizer_postmap(model, distance=norm_distance()):
 
     Returns
     -------
-    standard premap for optimizer
+    IdentityDict over model with standard optimizer keys
     """
     if isinstance(model['outputs'], gof.graph.Variable):
         targets = [model['outputs'].type()]
@@ -66,8 +66,19 @@ def deterministic_optimizer_postmap(model, distance=norm_distance()):
 
 
 def probabilistic_optimizer_postmap(model):
+    """ builds premap for a standard probabilistic model
+
+    Parameters
+    ----------
+    model : Model
+        to be transformed
+
+    Returns
+    -------
+    IdentityDict over model with standard optimizer keys
+    """
     # virtual random variable
-    # (we cannot use graph['RV'] itself, as the automatic gradients will get confused because graph['RV'] is a complex sampler)
+    # (we cannot use model['RV'] itself, as the automatic gradients will get confused because model['RV'] is a complex sampler)
     RV = model['RV'].type()  # like targets for deterministic model
     return IdentityDict(
         lambda key: model[key],
@@ -86,7 +97,7 @@ The following define such postmaps.
 
 
 def regularize_postmap(model, regularizer_norm=L2):
-    """ postmap for a standard deterministic model. Simply add this postmap to the graph.
+    """ postmap for a standard deterministic model. Simply add this postmap to the model.
 
     Parameters
     ----------
@@ -97,7 +108,7 @@ def regularize_postmap(model, regularizer_norm=L2):
 
     Returns
     -------
-    IdentityDict
+    IdentityDict over model
     """
     return IdentityDict(
         lambda key: model[key],
@@ -129,7 +140,7 @@ Numerical Postmaps
 def _numerical_parameters(model):
     """ standard remap for accessing shared theano parameters
 
-    if graph['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
+    if model['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
     values of all parameters are flattened out and concatinated to give a numerical representation alltogether
     """
     num_parameters = []
@@ -146,17 +157,17 @@ def _numerical_parameters(model):
 
 
 def _numericalize(model, loss_reference_name, d_order=0):
-    """ numericalizes ``graph[loss_reference_name]`` or the respective derivative of order ``d_order``
+    """ numericalizes ``model[loss_reference_name]`` or the respective derivative of order ``d_order``
 
     It works analogously to ``numerical_parameters`` in that it handles singleton cases or otherwise reshapes flattened
     numerical parameters.
 
     Parameters
     ----------
-    model : Graph
+    model : Model
         source from which to wrap
     loss_reference_name: str
-        graph[reference_name] will be wrapped
+        model[reference_name] will be wrapped
     d_order : int
         order of derivative (0 stands for no derivative) which shall be computed
     """
@@ -167,7 +178,13 @@ def _numericalize(model, loss_reference_name, d_order=0):
     elif d_order == 1:
         outputs = theano.grad(model[loss_reference_name], parameters)
     elif d_order == 2:
-        outputs = theano.gradient.hessian(model[loss_reference_name], parameters)
+        try:
+            outputs = theano.gradient.hessian(model[loss_reference_name], parameters)
+        except AssertionError:
+            # TODO hessian breaks if we use constants as parameters (or also matrices), as only vectors are supported
+            # possible workaround: adapt the custom shared definition to make constants of broadcastable (True,)
+            # instead of ()
+            raise TypeError("Cannot (yet) compute hessian for constant parameters.")
     else:
         raise ValueError("Derivative of order %s is not yet implemented" % d_order)
 
@@ -197,10 +214,29 @@ def _numericalize(model, loss_reference_name, d_order=0):
     return f
 
 
-def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}):
-    """ final postmap to offer an interface for standard numerical optimizer
+def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}, save_compiled_functions=True):
+    """ postmap to offer an interface for standard numerical optimizer
 
-    'loss' and etc. must be available in the graph"""
+    'loss' and etc. must be available in the model
+
+    Parameters
+    ----------
+    model : Model
+    annealing : bool
+        indicating whether 'loss_data' and 'loss_regularizer' should be used (annealing=True) or 'loss' (default)
+    wrapper : function f -> f where f function like used in scipy.optimize.minimize
+        wrappers like in schlichtanders.myoptimizers. E.g. batch, online, chunk...
+        or a composition of these
+    wrapper_kwargs : dict
+        extra kwargs for ``wrapper``
+    save_compiled_functions : bool
+        If false, functions are compiled on every postmap call anew. If true, they are hashed like in a usual DefaultDict
+
+    Returns
+    -------
+    DefaultDict over model
+
+    """
     if wrapper is None:
         if not annealing:
             def wrapper(f, **wrapper_kwargs): return f
@@ -222,10 +258,11 @@ def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}
                 _numericalize(model, "loss_regularizer", d_order=d_order[key])
             )
 
-    return DefaultDict(  # DefaultDict will save keys after they are called the first time
+    dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         lambda key: wrapper(lazy_numericalize(key), **wrapper_kwargs),
         num_parameters=_numerical_parameters(model)
     )
+    return dd if save_compiled_functions else dd.noexpand()
 
 
 """
@@ -233,35 +270,57 @@ Concrete Numeric Optimizer Postmaps
 -----------------------------------
 """
 
+_PostmapExceptions = (TypeError, KeyError)
+
 
 def scipy_postmap(model):
+    """ extracts kwargs for scipy.optimize.minize as far as available and mandatory
+
+    Parameters
+    ----------
+    model: Model
+
+    Returns
+    -------
+    dict
+    """
     kwargs = {
         "fun": model["num_loss"],
         "x0": model["num_parameters"],
     }
     try:
         kwargs["jac"] = model["num_jacobian"]
-    except KeyError:
+    except _PostmapExceptions:
         pass
 
     try:
         kwargs["hessp"] = model["num_hessianp"]
-    except KeyError:
+    except _PostmapExceptions:
         try:
             kwargs["hess"] = model["num_hessian"]
-        except KeyError:
+        except _PostmapExceptions:
             pass
     return kwargs
 
 
 def climin_postmap(model):
+    """ extracts kwargs for climin.util.optimizer as far as available and mandatory
+
+    Parameters
+    ----------
+    model: Model
+
+    Returns
+    -------
+    dict
+    """
     kwargs = {
         "f": model["num_loss"],
         "wrt": model["num_parameters"],
     }
     try:
         kwargs["fprime"] = model["num_jacobian"]
-    except KeyError:
+    except _PostmapExceptions:
         pass
 
     return kwargs
