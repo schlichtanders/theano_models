@@ -65,6 +65,8 @@ reparameterization helpers
 --------------------------
 """
 
+eps = as_tensor_variable(0.0001)
+
 
 def softplus(x, module=T):
     return module.log(module.exp(x) + 1)
@@ -72,6 +74,14 @@ def softplus(x, module=T):
 
 def softplus_inv(y, module=T):
     return module.log(module.exp(y) - 1)
+
+
+def squareplus(x, module=T):
+    return module.square(x) + eps  # to ensure >= 0
+
+
+def squareplus_inv(x, module=T):
+    return module.sqrt(x - eps)
 
 
 def reparameterize_map(f, finv):

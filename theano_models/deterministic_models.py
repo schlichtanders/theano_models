@@ -28,47 +28,50 @@ Standard Models are deterministic in the sense that they represent functions inp
 
 Basic Deterministic Model
 -------------------------
-
-In combination with referenced parameters, which are optimizable, we in fact already get a well defined
-deterministically optimizable model
 """
+'''
+In combination with referenced parameters, which are optimizable, we in fact already get a well defined
+deterministically optimizable model::
 
+    class DeterministicModel(Model):
+        """ models prediction of some y (outputs) given some optional xs (inputs)
 
-class DeterministicModel(Model):
-    """ models prediction of some y (outputs) given some optional xs (inputs)
-
-    hence, loss compares outputs with targets, while outputs depend on some input
-    """
-
-    def __init__(self, outputs, parameters, inputs=None, **further_references):
-        """ constructs general deterministic model
-
-        Parameters
-        ----------
-        parameters : list of theano expressions
-            parameters to be optimized
-        outputs : list of theano operator or Model
-            outputs of the model, depending on inputs
-        inputs : list of theano expressions
-            as usual (e.g. data types which the model can use for prediction)
-        distance : metric, function working on two lists of theano expressions
-            comparing targets (given as extra input for optimizer) with outputs
-            Defaults to standard square loss.
-        further_references : kwargs
-            other references
+        hence, loss compares outputs with targets, while outputs depend on some input
         """
-        if inputs is None:
-            inputs = []
 
-        super(DeterministicModel, self).__init__(
-            inputs=inputs,
-            outputs=outputs,
-            parameters=parameters,
-            **further_references
-        )
-        # could in principal be called before the constructor, however this order seems to make sense for a postmap:
-        self.set_postmap(deterministic_optimizer_postmap)
+        def __init__(self, outputs, parameters, inputs=None, **further_references):
+            """ constructs general deterministic model
 
+            Parameters
+            ----------
+            parameters : list of theano expressions
+                parameters to be optimized
+            outputs : list of theano operator or Model
+                outputs of the model, depending on inputs
+            inputs : list of theano expressions
+                as usual (e.g. data types which the model can use for prediction)
+            distance : metric, function working on two lists of theano expressions
+                comparing targets (given as extra input for optimizer) with outputs
+                Defaults to standard square loss.
+            further_references : kwargs
+                other references
+            """
+            if inputs is None:
+                inputs = []
+
+            super(DeterministicModel, self).__init__(
+                inputs=inputs,
+                outputs=outputs,
+                parameters=parameters,
+                **further_references
+            )
+            # could in principal be called before the constructor, however this order seems to make sense for a postmap:
+            self.set_postmap(deterministic_optimizer_postmap)
+
+However, it appears in the context of dynamically changing a model that a deterministic model becomes probabilistic.
+What we working with in this setting is always a Model. Therefore we leave this deterministic / probabilistic distinction
+as a convention of the respective kwargs.
+'''
 
 """
 MLP
@@ -76,7 +79,7 @@ MLP
 """
 
 
-class AffineNonlinear(DeterministicModel):
+class AffineNonlinear(Model):
 
     def __init__(self, output_size, input=None, transfer='identity'):
         # input needs to be vector
@@ -105,7 +108,7 @@ class AffineNonlinear(DeterministicModel):
         )
 
 
-class Mlp(DeterministicModel):
+class Mlp(Model):
 
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
@@ -141,7 +144,7 @@ E.g. useful to transform probability distributions. See ``NormalizingFlow`` with
 """
 
 
-class InvertibleModel(DeterministicModel):
+class InvertibleModel(Model):
 
     INVERTIBLE_MODELS = []
 
@@ -234,11 +237,10 @@ class InvertibleModel(DeterministicModel):
                 any_change |= im.reduce_identity()
 
 
-
 class PlanarTransform(InvertibleModel):
     """ invertable transformation, unfortunately without symbolic inverse """
 
-    def __init__(self, input=None, h=T.tanh):
+    def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
         if input is None:
             input = T.dvector(name="z")
         elif isinstance(input, Model):
@@ -247,12 +249,12 @@ class PlanarTransform(InvertibleModel):
             raise ValueError("Need singleton input vector.")
 
         self.b = as_tensor_variable(0, "b")
-        self.w = T.ones(input.shape)
+        self.w = T.ones(input.shape) if init_w is None else as_tensor_variable(init_w)
         self.w.name = "w"
-        self._u = T.zeros(input.shape)
+        self._u = T.zeros(input.shape) if init__u is None else as_tensor_variable(init__u)
         self._u.name = "_u"
         # this seems not reversable that easily:
-        self.u = self._u + (softplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
+        self.u = self._u + (R_to_Rplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
         # HINT: this softplus might in fact refer to a simple positive parameter, however the formula seems more complex
         # so I leave it with that
         self.u.name = "u"
@@ -296,10 +298,7 @@ class RadialTransform(InvertibleModel):
         self.beta = self.beta_plus_alpha - self.alpha
         self.beta.name = "beta"
 
-        if init_z0 is None:
-            self.z0 = T.zeros(input.shape)
-        else:
-            self.z0 = as_tensor_variable(init_z0)
+        self.z0 = T.zeros(input.shape) if init_z0 is None else as_tensor_variable(init_z0)
         self.z0.name = "z0"
 
         r = (input - self.z0).norm(2)

@@ -76,6 +76,8 @@ class Model(MutableMapping):
         return cp
 
     def function(self, *args, **kwargs):
+        if 'on_unused_input' not in kwargs:
+            kwargs['on_unused_input'] = "warn"
         return theano.function(self['inputs'], self['outputs'], *args, **kwargs)
 
     def postmap(self, **kwargs):

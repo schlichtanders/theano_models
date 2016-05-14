@@ -12,6 +12,7 @@ from theano.tensor.var import TensorConstant
 from theano.gof import utils
 from theano.tensor.sharedvar import TensorSharedVariable, tensor_constructor
 from theano.compile.sharedvalue import SharedVariable
+from theano.gof.graph import Variable
 import numpy
 import numpy as np
 import warnings
@@ -38,6 +39,11 @@ Here we circument the current state by wrapping constants in an identity
 
 
 def as_tensor_variable(x, name=None, ndim=None):
+    # for working with proxify it seems we need to ensure that everything has the same type
+    # (there are internal checks like if c = a + b is initially int8 (because a and b were so)
+    # and now a and b are proxified to mirrow float types, then c will break in ``assert c.dtype == (a+b).dtype``)
+    if not isinstance(x, Variable):
+        x = np.array(x, copy=False, dtype=config.floatX)
     ret = _as_tensor_variable(x, name, ndim)
     if isinstance(ret, TensorConstant):
         quasi_constant = T.tensor_copy(ret)

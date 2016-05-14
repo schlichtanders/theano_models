@@ -354,7 +354,7 @@ def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}
 
 def flat_numericalize_postmap(model,
                               annealing=False, wrapper=None, wrapper_kwargs={},
-                              save_compiled_functions=True, initial_givens=None, adapt_init_params=lambda ps: ps):
+                              save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps):
     """ postmap to offer an interface for standard numerical optimizer
 
     'loss' and etc. must be available in the model
@@ -371,7 +371,7 @@ def flat_numericalize_postmap(model,
         extra kwargs for ``wrapper``
     save_compiled_functions : bool
         If false, functions are compiled on every postmap call anew. If true, they are hashed like in a usual DefaultDict
-    initial_givens : dict
+    initial_inputs : list of values matching model['inputs']
         for parameters which are not grounded, but depend on the input (only needed for initialization)
         NON-OPTIONAL!! (because this hidden behaviour might easily lead to weird bugs)
     adapt_init_params : function numpy-vector -> numpy-vector
@@ -382,9 +382,9 @@ def flat_numericalize_postmap(model,
     DefaultDict over model
     """
     assert len(model['parameters']) == 1
-    if initial_givens is None:
-        raise ValueError("Need ``initial_givens`` to prevent subtle bugs. If really no inputs are needed, please supply"
-                         "empty dictionary {} as kwarg.")
+    if initial_inputs is None:
+        raise ValueError("Need ``initial_inputs`` to prevent subtle bugs. If really no inputs are needed, please supply"
+                         "empty list [] as kwarg.")
     if wrapper is None:
         if not annealing:
             def wrapper(f, **wrapper_kwargs):
@@ -413,7 +413,7 @@ def flat_numericalize_postmap(model,
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=lambda key: wrapper(numericalize(key), **wrapper_kwargs),
         default_setitem=lambda key, value: NotImplementedError("You cannot set items on a numericalize postmap."),
-        num_parameters=adapt_init_params(parameters.eval(initial_givens))
+        num_parameters=adapt_init_params(parameters.eval(dict(izip(model['inputs'], initial_inputs))))
     )
     return dd if save_compiled_functions else dd.noexpand()
 

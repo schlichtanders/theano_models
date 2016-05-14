@@ -44,75 +44,115 @@ Basic Probabilistic Model
 -------------------------
 """
 
+'''
+The base probabilistic model would be::
 
-class ProbabilisticModel(Model):
-    """ Returns a random variable with Probability Distribution attached (.P)
+    class ProbabilisticModel(Model):
+        """ Returns a random variable with Probability Distribution attached (.P)
 
-    While the random variable describes some target, its distribution can depend on further parameters. This can be
-    used for noise modeling ("unsupervised"), prediction ("supervised"), ...
+        While the random variable describes some target, its distribution can depend on further parameters. This can be
+        used for noise modeling ("unsupervised"), prediction ("supervised"), ...
 
-    The optimizer optimizes probability of Data = (Targets, ExtraInformations), which is interpreted as probability
-    of the Targets given the optional extra information.
+        The optimizer optimizes probability of Data = (Targets, ExtraInformations), which is interpreted as probability
+        of the Targets given the optional extra information.
 
-    Probabilistic models are relatively intuitive to use, however they have a rather intricate internal
-    building (which is due to how probability works).
+        Probabilistic models are relatively intuitive to use, however they have a rather intricate internal
+        building (which is due to how probability works).
 
-    Concrete, for a conditional probabilistic model inputs work like further parameters, and the outputs is the
-    target random variable (with respective distribution function).
+        Concrete, for a conditional probabilistic model inputs work like further parameters, and the outputs is the
+        target random variable (with respective distribution function).
 
-    Note
-    ----
-    A probabilistic model is meant to have only one output. Several outputs could be interpreted as
-    *independent* random variables, however then they should not depend on a same set of expressions / parameters and
-    hence should be separated in distinct probabilistic models.
+        Note
+        ----
+        A probabilistic model is meant to have only one output. Several outputs could be interpreted as
+        *independent* random variables, however then they should not depend on a same set of expressions / parameters and
+        hence should be separated in distinct probabilistic models.
 
-    Comparison to DeterministicModel
-    --------------------------------
-    A deterministic model outputs a kind of deterministic prediction.
-    In a respective probabilistic model, the output is now a *random* variable y, i.e. instead of a prediction,
-    a distribution over predictions is returned.
-    Both models can depend on some extra inputs (deterministic in both models).
-    """
-
-    def __init__(self, RV, logP, parameters, inputs=None, **further_references):
+        Comparison to DeterministicModel
+        --------------------------------
+        A deterministic model outputs a kind of deterministic prediction.
+        In a respective probabilistic model, the output is now a *random* variable y, i.e. instead of a prediction,
+        a distribution over predictions is returned.
+        Both models can depend on some extra inputs (deterministic in both models).
         """
+
+        def __init__(self, RV, logP, parameters, inputs=None, **further_references):
+            """
+            Parameters
+            ----------
+            RV: random variable, theano expression (shared random stream)
+                output random variable which probability distribution shall be optimized.
+                The concrete sampler can depend on the inputs.
+                Note: if you want to have several outputs, build a custom multi-dimensional RV, so that the product
+                probability distribution is clear. (may support standard iid list in the future)
+
+            logP : function RV -> scalar theano expression
+                the log probability distribution which depends on the function argument, if P is function.
+                The probability distribution can further depend on the input.
+
+            parameters : list of theano expressions
+                parameters to be optimized eventually
+
+            inputs : list of theano expressions
+                extra information needed to compute the probability distribution of RV
+            """
+            if inputs is None:
+                inputs = []
+
+            further_references.pop('outputs', None)  # must not be given twice; None is essential as otherwise a Keyerror is thrown if outputs is not given
+
+            super(ProbabilisticModel, self).__init__(
+                inputs=inputs,
+                outputs=RV,
+                RV=RV,  # direct alias
+                logP=logP,
+                parameters=parameters,
+                **further_references
+            )
+            # could in principal be called before the constructor, however this order seems to make sense for a postmap:
+            self.set_postmap(probabilistic_optimizer_postmap)
+
+However, we leav this interface as a convention because when working with substitution, a deterministic model can easily
+become a probabilistic one. This suggests that we are working with Models rather than Deterministic/Probabilistic models.
+
+However for the optimizer it is of course crucial, and here the respective optimizer postmap should be used.
+'''
+# TODO maybe add ProbabilisticModel type which checks for given keys (?)
+
+
+"""
+Composing Deterministic and Probabilistic Models
+------------------------------------------------
+
+Note, like all wrappers, also these are composable with standard compose function.
+"""
+
+
+def normalizing_flow(invertible_model, base_prob_model):
+        """ transforms ``invertible_model['inputs'] = base_prob_model`` while adding correct ``logP``
+
+        No merging is performed. Do this separately.
+
+        Note
+        ----
+        In case you wanna use self[P_RV] = self[RV] further simplifications apply due to the invertible models.
+        Simply run InvertibleModel.reduce_all_identities()
+
         Parameters
         ----------
-        RV: random variable, theano expression (shared random stream)
-            output random variable which probability distribution shall be optimized.
-            The concrete sampler can depend on the inputs.
-            Note: if you want to have several outputs, build a custom multi-dimensional RV, so that the product
-            probability distribution is clear. (may support standard iid list in the future)
-
-        logP : function RV -> scalar theano expression
-            the log probability distribution which depends on the function argument, if P is function.
-            The probability distribution can further depend on the input.
-
-        parameters : list of theano expressions
-            parameters to be optimized eventually
-
-        inputs : list of theano expressions
-            extra information needed to compute the probability distribution of RV
+        base_prob_model : ProbabilisticModel
+            defines z
+        invertible_model : InvertibleModel
+            invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
         """
-        if inputs is None:
-            inputs = []
 
-        further_references.pop('outputs', None)  # must not be given twice; None is essential as otherwise a Keyerror is thrown if outputs is not given
+        def logP(y):
+            return base_prob_model['logP'](invertible_model.inv(y)) - T.log(abs(invertible_model['norm_det']))  # equation (5)
 
-        super(ProbabilisticModel, self).__init__(
-            inputs=inputs,
-            outputs=RV,
-            RV=RV,  # direct alias
-            logP=logP,
-            parameters=parameters,
-            **further_references
-        )
-        # could in principal be called before the constructor, however this order seems to make sense for a postmap:
-        self.set_postmap(probabilistic_optimizer_postmap)
-
-
-#: alias
-DistributionApproximator = ProbabilisticModel
+        del invertible_model['RV']
+        invertible_model['RV'] = invertible_model['outputs']
+        invertible_model['logP'] = logP
+        return invertible_model
 
 
 """
@@ -233,7 +273,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     def variational_lower_bound(RV):
         return Y['loglikelihood'](RV) - 1/Y['n_data'] * kl_prior
     Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
-    return Y.replace_postmap(probabilistic_optimizer_postmap, variational_postmap)  # returns flag whether something was replaced
+    return Y
 
 
 """
@@ -242,7 +282,7 @@ Noise Models
 """
 
 
-class DiagGaussianNoise(ProbabilisticModel):
+class DiagGaussianNoise(Model):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -312,7 +352,7 @@ Base Distributions
 """
 
 
-class DiagGauss(ProbabilisticModel):
+class DiagGauss(Model):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -377,7 +417,7 @@ class DiagGauss(ProbabilisticModel):
         super(DiagGauss, self).__init__(**kwargs)
 
 
-class Uniform(ProbabilisticModel):
+class Uniform(Model):
 
     def __init__(self, output_size=1, init_start=None, init_offset=None, rng=None):
         """ Initialise a uniform random variable with given range (by start and offset).
@@ -435,42 +475,4 @@ class Uniform(ProbabilisticModel):
             logP=logP,
             parameters=[self.start],
             parameters_positive=[self.offset]
-        )
-
-
-"""
-Distribution Wrapper
---------------------
-
-Note, like all wrappers, also these are composable with standard compose function. The only difference is that here
-the wrappers are classes and not functions.
-"""
-
-
-class NormalizingFlow(ProbabilisticModel):
-
-    def __init__(self, invertible_model, base_prob_model):
-        """ Generic Normalizing Flow
-
-        Note
-        ----
-        In case you wanna use self[P_RV] = self[RV] further simplifications apply due to the invertible models.
-        Simply run InvertibleModel.reduce_all_identities()
-
-
-        Parameters
-        ----------
-        base_prob_model : ProbabilisticModel
-            defines z
-        invertible_model : InvertibleModel
-            invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
-        """
-
-        def logP(y):
-            return base_prob_model['logP'](invertible_model.inv(y)) - T.log(abs(invertible_model['norm_det']))  # equation (5)
-
-        super(NormalizingFlow, self).__init__(
-            RV=invertible_model(base_prob_model['RV']),
-            logP=logP,
-            parameters=base_prob_model['parameters'] + invertible_model['parameters']
         )
