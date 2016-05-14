@@ -15,7 +15,6 @@ from theano import gof, config
 from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update
-from schlichtanders.myfunctools import Compose, I, fmap
 from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
 from util import complex_reshape, clone, as_tensor_variable
@@ -51,7 +50,6 @@ class Model(MutableMapping):
         inputs: list of theano expressions (or exceptionally also single expression)
             functional like inputs
             if not given explicitly ``inputs`` get set to ``theano.gof.graph.inputs(outputs)``
-
         further_references: kwargs of string: (theano expressions, or lists thereof)
             possible further references
         """
@@ -67,7 +65,6 @@ class Model(MutableMapping):
             'inputs': gof.graph.inputs(outputs) if inputs is None else inputs,
         }
         self.references.update(further_references)
-        self._postmap = I  # we use a complex Compose, so that we can call the _postmap with complex kwargs
 
     def __copy__(self):
         cls = self.__class__
@@ -79,27 +76,6 @@ class Model(MutableMapping):
         if 'on_unused_input' not in kwargs:
             kwargs['on_unused_input'] = "warn"
         return theano.function(self['inputs'], self['outputs'], *args, **kwargs)
-
-    def postmap(self, **kwargs):
-        return self._postmap(self, **kwargs)
-
-    def set_postmap(self, postmap):
-        self._postmap = Compose(postmap)
-
-    def add_postmap(self, postmap, call_first=False):
-        """ combines existing postmap with new postmap """
-        if call_first:
-            self._postmap = self._postmap + postmap
-        else:
-            self._postmap = postmap + self._postmap
-
-    def replace_postmap(self, old_postmap, new_postmap):
-        changed = False
-        for i, f in enumerate(self._postmap._funcs):
-            if f == old_postmap:
-                self._postmap.funcs[i] = new_postmap
-                changed = True
-        return changed
 
     # Substitution Interface
     # ----------------------
