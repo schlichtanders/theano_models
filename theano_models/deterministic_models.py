@@ -11,9 +11,8 @@ from itertools import izip
 
 from breze.arch.component import transfer as _transfer
 
-from base import Model
-from postmaps import deterministic_optimizer_postmap
-from util import softplus, as_tensor_variable, merge_parameters
+from base import Model, models_as_outputs, merge_key
+from util import softplus, as_tensor_variable
 from placeholders import Placeholder
 
 
@@ -132,7 +131,7 @@ class Mlp(Model):
         super(Mlp, self).__init__(
             inputs=[input],
             outputs=layer,  # same as layer['outputs'] at this place, as Model automatically handles isinstance(outputs,Model)
-            parameters=merge_parameters(self.layers)
+            parameters=merge_key(self.layers)
         )
 
 
@@ -207,6 +206,7 @@ class InvertibleModel(Model):
             inverse_inputs=self['inputs'],
             inverse_outputs=self['outputs'],
             parameters=self['parameters'],
+            norm_det=T.inv(self['norm_det']),  # TODO is it really only the inverse?
         )
 
     def reduce_identity(self):

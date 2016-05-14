@@ -8,8 +8,7 @@ import theano
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
-from base import Model
-from postmaps import probabilistic_optimizer_postmap, variational_postmap
+from base import Model, models_as_outputs
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
 from util import as_tensor_variable
@@ -129,30 +128,30 @@ Note, like all wrappers, also these are composable with standard compose functio
 
 
 def normalizing_flow(invertible_model, base_prob_model):
-        """ transforms ``invertible_model['inputs'] = base_prob_model`` while adding correct ``logP``
+    """ transforms ``invertible_model['inputs'] = base_prob_model`` while adding correct ``logP``
 
-        No merging is performed. Do this separately.
+    No merging is performed. Do this separately.
 
-        Note
-        ----
-        In case you wanna use self[P_RV] = self[RV] further simplifications apply due to the invertible models.
-        Simply run InvertibleModel.reduce_all_identities()
+    Note
+    ----
+    In case you wanna use self[P_RV] = self[RV] further simplifications apply due to the invertible models.
+    Simply run InvertibleModel.reduce_all_identities()
 
-        Parameters
-        ----------
-        base_prob_model : ProbabilisticModel
-            defines z
-        invertible_model : InvertibleModel
-            invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
-        """
+    Parameters
+    ----------
+    base_prob_model : ProbabilisticModel
+        defines z
+    invertible_model : InvertibleModel
+        invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
+    """
+    invertible_model(base_prob_model)  # output not needed, but assigns input
+    @models_as_outputs
+    def normalized_flow(y):
+        # equation (5)
+        return base_prob_model['logP'](invertible_model.inv(y)) - T.log(abs(invertible_model['norm_det']))
 
-        def logP(y):
-            return base_prob_model['logP'](invertible_model.inv(y)) - T.log(abs(invertible_model['norm_det']))  # equation (5)
-
-        del invertible_model['RV']
-        invertible_model['RV'] = invertible_model['outputs']
-        invertible_model['logP'] = logP
-        return invertible_model
+    invertible_model['logP'] = normalized_flow
+    return invertible_model
 
 
 """
@@ -236,26 +235,20 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"
     # [if we would be able to do math on Theano variables (or use sympy variables for everything)
     # we could also compute the Kullback-Leibler divergence symbolically, however this is not (yet?) the case]
-    if kl_prior is not None:
-        # no substitution necessary as kl_prior should not depend on X anylonger, but only on hyperparameters.
-        if isinstance(kl_prior, Model):
-            kl_prior = kl_prior['outputs']  # assumes single output
-        # else
-        # kl_prior is already standard expression
-    else:
+    if kl_prior is None:
         # as we assume independent sub distribution,
         # the overall log_prior_distr or log_posterior_distr can be computed as a sum of the single log
         # Note, that the variational lower bound requires to substitute RV from X into every distribution function
         log_prior_distr = 0.0
         for prior, X in zip(priors, Xs):
-            if isinstance(prior, ProbabilisticModel):
+            if isinstance(prior, Model):
                 prior = prior['logP']  # merge must be done outside
             # else prior is already a logP function
-            log_prior_distr += prior(X['RV'])
+            log_prior_distr += prior(X)
 
         log_posterior_distr = 0.0
         for X in Xs:
-            log_posterior_distr += X['logP'](X['RV'])
+            log_posterior_distr += X['logP'](X)
 
         kl_prior = log_posterior_distr - log_prior_distr
 
@@ -266,12 +259,13 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
 
     Y['loglikelihood'] = Y['logP']
     if "n_data" not in Y:
-        Y['n_data'] = theano.shared(1)  # needs to be updated externally, therefore real theano.shared variable
+        Y['n_data'] = theano.shared(1)  # needs to be updated externally, therefore real theano.shared variable here
 
     Y[randomize_key] = Xs  # e.g. make original parameters random
 
-    def variational_lower_bound(RV):
-        return Y['loglikelihood'](RV) - 1/Y['n_data'] * kl_prior
+    @models_as_outputs
+    def variational_lower_bound(rv):
+        return Y['loglikelihood'](rv) - 1 / Y['n_data'] * kl_prior
     Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
     return Y
 
@@ -331,14 +325,17 @@ class DiagGaussianNoise(Model):
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
         noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
-        RV = input + T.sqrt(self.var) * noise
-        logP = lambda RV: (
-            (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
-            - (1/2 * T.sum((RV - input) ** 2 / self.var))  # core exponential
-        )  # everything is elementwise
+        outputs = input + T.sqrt(self.var) * noise  # random sampler
+
+        @models_as_outputs
+        def logP(rv):
+            return (
+                (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
+                - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
+            )  # everything is elementwise
 
         super(DiagGaussianNoise, self).__init__(
-            RV=RV,
+            outputs=outputs,
             logP=logP,
             inputs=[input],
             parameters=[],
@@ -464,14 +461,16 @@ class Uniform(Model):
         self.offset = as_tensor_variable(init_offset, "offset")  # TODO broadcastable?
 
         noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
-        RV = noise * self.offset + self.start
+        outputs = noise * self.offset + self.start  # random sampler
 
-        logP = lambda RV: (
-            (T.log(T.le(self.start, RV)) + T.log(T.le(RV, self.start + self.offset)) - T.log(self.offset)).sum()  # independend components
-        )
+        @models_as_outputs
+        def logP(rv):
+            # summed over independend components
+            return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
 
         super(Uniform, self).__init__(
-            RV=RV,
+            outputs=outputs,
+            inputs=[],
             logP=logP,
             parameters=[self.start],
             parameters_positive=[self.offset]

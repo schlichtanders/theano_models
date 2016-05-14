@@ -10,55 +10,6 @@ from schlichtanders.mydicts import update
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-"""
-Merge helpers
--------------
-"""
-
-
-def merge_parameters(models, key="parameters"):
-    """ combines all params, retaining only SharedVariables """
-    parameters = []
-    for g in models:
-        parameters += g[key]
-    # return [p for p in parameters if isinstance(p, SharedVariable)]
-    return parameters  # no filtering for SharedVariable possible as everything is theano variable (maybe constant variable)
-
-
-def merge_inputs(models, key="inputs"):
-    """ combines all inputs, retaining only such with empty owner """
-    inputs = []
-    for g in models:
-        inputs += g[key]
-    return [i for i in inputs if i.owner is None]
-
-
-def merge(model_type, *models, **kwargs):
-    """ This method is only for convenience and suggestion.
-    Short version::
-    >>> merged_ = {'parameters':merge_parameters(models), 'inputs':merge_inputs(models)}
-    >>> merged = Model(**update(merged_, models[0], overwrite=False)
-    or with alternativ ending
-    >>> merged = Model(**update(dict(models[0]), merged_))
-    which is shorter, but with slight copy overhead.
-
-    Parameters
-    ----------
-    model_type : model class
-        initialized with kwargs
-    models : list of Model
-        used for further merging
-        first model is regarded as base model which additional keys will be used
-    merge_rules: dictionary of functions working on models
-        mapping merge_key to merger
-    """
-    merge_rules = kwargs.pop('merge_rules', {'parameters': merge_parameters, 'inputs': merge_inputs})  # python 3 keyword arg alternative
-
-    merged = {k: m(models) for k, m in merge_rules.iteritems()}
-    fmap(remove_duplicates, merged)
-
-    update(merged, models[0], overwrite=False)
-    return model_type(**merged)
 
 """
 reparameterization helpers

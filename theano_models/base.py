@@ -6,7 +6,9 @@ import warnings
 from collections import Sequence, MutableMapping
 from copy import copy
 from itertools import izip
-import json
+from pprint import pformat
+import wrapt
+from functools import partial
 
 import numpy as np
 import theano
@@ -17,9 +19,10 @@ from theano.compile.sharedvalue import SharedVariable
 from schlichtanders.mydicts import update
 from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
+from schlichtanders.myfunctools import fmap
+
 from util import complex_reshape, clone, as_tensor_variable
 from util.theano_helpers import is_clonable
-from pprint import pformat
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -57,8 +60,9 @@ class Model(MutableMapping):
             outputs = outputs['outputs']
         if isinstance(inputs, Model):
             inputs = Model['outputs']
-        if not isinstance(inputs, Sequence):
-            raise ValueError("need *list* of theano expressions as inputs")
+        if inputs is not None and not isinstance(inputs, Sequence):
+            warnings.warn("Detected singleton input and wrapped it to ``inputs = [input]``.")
+            inputs = [inputs]
 
         self.references = {
             'outputs': outputs,
@@ -108,10 +112,8 @@ class Model(MutableMapping):
                     _new.append(as_tensor_variable(n))
             new = _new
         # no Sequence, try FANCY REWRITING
-        elif (
-            hasattr(new, 'broadcastable') and new.broadcastable == (False,)
-            and all(is_clonable(o) for o in old)
-        ):  # vector type of arbitrary dtype
+        elif (hasattr(new, 'broadcastable') and new.broadcastable == (False,)
+              and all(is_clonable(o) for o in old)):  # vector type of arbitrary dtype
             print "fancy reshaping"
             old_cp = [clone(o) for o in old]  # we need copy as new gets proxified later on
             new = list(complex_reshape(new, old_cp))
@@ -145,6 +147,8 @@ class Model(MutableMapping):
         if key in self:
             self.substitute_key(key, value)
         else:
+            if isinstance(value, Model):
+                value = value['outputs']
             self.references[key] = value
 
     def __call__(self, *inputs):
@@ -222,3 +226,71 @@ def reset_eval(var):
         if hasattr(var, '_fn_cache'):
             del var._fn_cache
     # everything else does not need to be reset
+
+
+"""
+decorator helper
+----------------
+"""
+
+@wrapt.decorator
+def models_as_outputs(wrapped, instance, args, kwargs):
+    def to_output(m):
+        return m['outputs'] if isinstance(m, Model) else m
+    return wrapped(*map(to_output,args), **fmap(to_output, kwargs))
+
+"""
+Merge helpers
+-------------
+"""
+
+
+def merge_key(models, key="parameters"):
+    """ simply combines all model[key] values for model in models """
+    parameters = []
+    for g in models:
+        parameters += g[key]
+    # return [p for p in parameters if isinstance(p, SharedVariable)]
+    return parameters  # no filtering for SharedVariable possible as everything is theano variable (maybe constant variable)
+
+
+def merge_inputs(models, key="inputs"):
+    """ combines all inputs, retaining only such with empty owner """
+    inputs = []
+    for g in models:
+        inputs += g[key]
+    return [i for i in inputs if i.owner is None]
+
+
+class Merge(Model):
+    """ This class is only for convenience and suggestion.
+    simple manual version::
+    >>> merged_ = {k:merge_key(models, k) for k in ('parameters', 'parameters_positive', 'inputs'}
+    >>> merged = Model(**update(merged_, models[0], overwrite=False)
+    or with alternativ ending
+    >>> merged = Model(**update(dict(models[0]), merged_))
+    which is shorter, but with slight copy overhead.
+    """
+    def __init__(self, *models, **merge_rules):
+        """
+        Parameters
+        ----------
+        model_type : model class
+            initialized with kwargs
+        models : list of Model
+            used for further merging
+            first model is regarded as base model which additional keys will be used
+        merge_rules: dictionary of functions working on models
+            mapping merge_key to merger
+        """
+        if not merge_rules:  # manual empty merge rule makes no sense if we want to merge, hence this means use default
+            merge_rules = {
+                'parameters': merge_key,
+                'parameters_positive': partial(merge_key, key="parameters_positive"),
+                'inputs': merge_inputs,
+            }  # python 3 keyword arg alternative
+
+        merged = {k: m(models) for k, m in merge_rules.iteritems()}
+        fmap(remove_duplicates, merged)
+        update(merged, models[0], overwrite=False)
+        super(Merge, self).__init__(**merged)

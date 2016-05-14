@@ -18,7 +18,6 @@ from util.theano_helpers import is_clonable, gen_variables, GroundedVariableType
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 
-import theano.gof.fg
 """
 Postmaps
 ========
@@ -84,7 +83,7 @@ def probabilistic_optimizer_postmap(model):
     """
     # virtual random variable
     # (we cannot use model['RV'] itself, as the automatic gradients will get confused because model['RV'] is a complex sampler)
-    RV = model['RV'].type()  # like targets for deterministic model
+    RV = model['outputs'].type()  # like targets for deterministic model
     return PassThroughDict(model,
         loss_inputs=[RV] + model['inputs'],
         loss=-model['logP'](RV)
@@ -123,7 +122,7 @@ def regularize_postmap(model, regularizer_norm=L2):
 
 def variational_postmap(model):
     """use this postmap INSTEAD of the standard probabilistic postmap"""
-    RV = model['RV'].type()  # like targets for deterministic model
+    RV = model['outputs'].type()  # like targets for deterministic model
     return PassThroughDict(model,
         loss_inputs=[RV] + model['inputs'],
         loss=-model['logP'](RV),
@@ -405,10 +404,13 @@ def flat_numericalize_postmap(model,
         return theano.function([parameters] + model['loss_inputs'], outputs, on_unused_input="warn")
 
     def numericalize(key):
-        if not annealing:
-            return function(derivatives[key]("loss"))
-        else:
-            return function(derivatives[key]("loss_data")), function(derivatives[key]("loss_regularizer"))
+        try:
+            if not annealing:
+                return function(derivatives[key]("loss"))
+            else:
+                return function(derivatives[key]("loss_data")), function(derivatives[key]("loss_regularizer"))
+        except (KeyError, TypeError, ValueError):
+            raise KeyError("requested key %s not computable" % key)
 
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=lambda key: wrapper(numericalize(key), **wrapper_kwargs),
@@ -417,12 +419,11 @@ def flat_numericalize_postmap(model,
     )
     return dd if save_compiled_functions else dd.noexpand()
 
+
 """
 Concrete Numeric Optimizer Postmaps
 -----------------------------------
 """
-
-_PostmapExceptions = (TypeError, KeyError)
 
 
 def scipy_postmap(model):
@@ -442,15 +443,15 @@ def scipy_postmap(model):
     }
     try:
         kwargs["jac"] = model["num_jacobian"]
-    except _PostmapExceptions:
+    except KeyError:
         pass
 
     try:
         kwargs["hessp"] = model["num_hessianp"]
-    except _PostmapExceptions:
+    except KeyError:
         try:
             kwargs["hess"] = model["num_hessian"]
-        except _PostmapExceptions:
+        except KeyError:
             pass
     return kwargs
 
@@ -472,7 +473,7 @@ def climin_postmap(model):
     }
     try:
         kwargs["fprime"] = model["num_jacobian"]
-    except _PostmapExceptions:
+    except KeyError:
         pass
 
     return kwargs
