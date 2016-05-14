@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 from six import integer_types
-from collections import Sequence, OrderedDict
+from collections import Sequence, OrderedDict, defaultdict
+from itertools import izip
 
 import theano
 from theano import config, gof, clone as _clone
@@ -82,7 +83,7 @@ def clone(output,
           strict=True,
           share_inputs=True,
           copy_inputs=DEPRECATED_ARG):
-    if replace is None:
+    if replace is None:  # TODO test again, whether this is truly needed!
         cp = copy(output)
         if cp.owner is not None:  # CRUCIAL: reference in owner must mirrow self!!
             # CRUCIAL: original owner must mirrow original self, hence copy also owner
@@ -102,6 +103,27 @@ def clone(output,
 theano graph helpers
 --------------------
 """
+
+
+def clone_all(outputs):
+    """ cloning dependent variables needs care of nesting
+
+    Parameters
+    ----------
+    outputs : list of theano variables
+        to be copied
+
+    Returns
+    -------
+    copies
+    """
+    sort_idx = sort_dependent_last(outputs, return_idx=True)
+    copies = [None]*len(outputs)
+    for i in sort_idx:
+        # replace all nested dependencies with the respective copies (valid by previous sorting)
+        copies[i] = clone(outputs[i], replace={o: cp for o, cp in izip(outputs, copies) if cp is not None})
+    return copies
+
 
 def gen_nodes(initial_variables, filter=lambda n:True):
     if not isinstance(initial_variables, Sequence):
@@ -125,14 +147,69 @@ def gen_variables(initial_variables, filter=lambda v:v.owner is None):
                 yield _v
 
 
-GroundedVariableType = (gof.graph.Constant, SharedVariable)
-
 
 def is_clonable(variable):
     return variable.owner is not None or isinstance(variable, GroundedVariableType)
 
 
-#
+def depends_on(var1, var2):
+    for v in gen_variables(var1, lambda v: True):
+        if v == var2:
+            return True
+    return False
+
+
+def get_dependencies(variables, dependents=None):
+    if dependents is None:
+        dependents = variables
+    if not isinstance(variables, Sequence):
+        variables = [variables]
+    dependencies = defaultdict(list)  # {indepedent: dependent}
+    for var in variables:
+        for v in gen_variables(dependents, lambda v: v.owner is not None and var in v.owner.inputs):
+            dependencies[var].append(v)
+    return dependencies
+
+
+def sort_dependent_last(variables, return_idx=False, return_both=False):
+    """ sorts variables such that later variables depend on earlier (e.g. needed for flattening)
+    >>> a = as_tensor_variable(1)
+    >>> b = as_tensor_variable(2)
+    >>> c = b + 1
+    >>> d = c + b
+    >>> sort_dependent_last([c,a,b,d], return_idx=True)
+    [1, 2, 0, 3]
+
+    Parameters
+    ----------
+    variables : list of variables
+        to be sorted
+    return_idx : bool
+        of True, then a sorting index is returned instead of the sorted variables
+
+    Returns
+    -------
+    sorted idx if return_idx else sorted variables
+    """
+    variables = list(enumerate(variables))
+    sorted_v = []
+    sorted_i = []
+    while variables:
+        i, var = variables.pop(0)
+        if any(depends_on(var, v) for i, v in variables):  # initial var was popped
+            variables.append((i, var))  # put it to the back
+        else:
+            # do not depend on anything else
+            sorted_v.append(var)
+            sorted_i.append(i)
+    if return_idx:
+        return sorted_i
+    elif return_both:
+        return sorted_v, sorted_i
+    else:
+        return sorted_v
+
+        #
 # """
 # shared redefined
 # ----------------

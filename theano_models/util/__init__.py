@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from itertools import izip
 import theano.tensor as T
-from theano_helpers import as_tensor_variable, clone, is_clonable  # because this is so central
+from theano_helpers import as_tensor_variable, clone, is_clonable, clone_all  # because this is so central
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 from schlichtanders.mylists import remove_duplicates
@@ -65,6 +65,7 @@ def reparameterize_map(f, finv):
         proxify(param, proxified_param)
         return new_param  # instead of old parameter, now refer directly to the new underlying parameter
     return reparameterize
+
 
 """
 norms and distances

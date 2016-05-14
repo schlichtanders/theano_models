@@ -6,14 +6,15 @@ from theano import gof
 import theano.tensor as T
 import numpy as np
 from itertools import izip
+from copy import copy
 
 from schlichtanders.mydicts import PassThroughDict, DefaultDict
 from schlichtanders.mylists import deepflatten
 from schlichtanders.mynumpy import complex_reshape
 from schlichtanders.mymeta import proxify
 
-from util import norm_distance, L2, clone
-from util.theano_helpers import is_clonable, gen_variables, GroundedVariableType
+from util import norm_distance, L2, clone, clone_all
+from util.theano_helpers import is_clonable, gen_variables, sort_dependent_last, get_dependencies
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -411,6 +412,11 @@ def flat_numericalize_postmap(model,
                 return function(derivatives[key]("loss_data")), function(derivatives[key]("loss_regularizer"))
         except (KeyError, TypeError, ValueError):
             raise KeyError("requested key %s not computable" % key)
+        except AssertionError:
+            # TODO got the following AssertionError which seems to be a bug deep in theano/proxifying theano
+            # "Scan has returned a list of updates. This should not happen! Report this to theano-users (also include the script that generated the error)"
+            # for now we ignore this
+            raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
 
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=lambda key: wrapper(numericalize(key), **wrapper_kwargs),
@@ -497,12 +503,32 @@ def flatten_keys(model, keys_to_flatten=None):
             flats[key] = model[key + '_flat'][0]
         except KeyError:
             assert all(is_clonable(p) for p in model[key]), "can only flatten clonable parameters"
-            names = [p.name if p.name is not None else "_" for p in model[key]]
-            copies = [clone(p) for p in model[key]]
-            # for cp in copies:
-            #     cp.name = (cp.name or str(cp)) + "_copy"
+            # it is unfortunately not trivial how to flatten parameters
+            # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
+            # while both are parameters finally. If p3 comes before p1, we get that
+            # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
+            # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
+            # to get its position in the flat string
+            # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
+            # well formed theano variables. It is tree-like orderable.
+
+            copies = clone_all(model[key])
+            # variables = sort_dependent_last(model[key])
+            # copies = []
+            # for var in variables:
+            #     # replace all nested dependencies with the respective copies (valid by previous sorting)
+            #     copies.append(clone(var, replace=dict(izip(variables, copies))))
+
+            # var_to_cp = dict(zip(variables, copies))
+            # dependencies = get_dependencies(variables, copies)
+            # for var, deps in dependencies.iteritems():
+            #     for d in deps:  # this is a variable which owner has var as input
+            #         owner_cp = copy(d.owner)
+            #         owner_cp.inputs = map(lambda i: var_to_cp.get(i,i), d.owner.inputs)
+
             flat = T.concatenate([cp.flatten() for cp in copies])
-            flat.name = ":".join(names)
+            flat.name = ":".join(cp.name for cp in copies)
+
             i = 0
             for p, cp in izip(model[key], copies):
                 # for size and shapes we need to refer to the copies, as the original parameters get proxified
@@ -516,7 +542,7 @@ def flatten_keys(model, keys_to_flatten=None):
             flats[key] = flat
 
     return PassThroughDict(model, {
-        key: [flats[key]]
+        key: [flats[key]] for key in keys_to_flatten
     })
 
 
