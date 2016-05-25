@@ -99,7 +99,13 @@ class Model(MutableMapping):
         if isinstance(new, Model):
             new = new['outputs']
         elif not isinstance(new, Sequence):
-            new = as_tensor_variable(new)
+            try:
+                new = as_tensor_variable(new)
+            except TypeError:
+                # default to direct assignment
+                warnings.warn("non theano value, overwriting key directly")
+                self.references[key] = new
+                return
 
         if isinstance(new, Sequence):
             # if there are models, recognize them and use there outputs
@@ -115,9 +121,8 @@ class Model(MutableMapping):
         elif (hasattr(new, 'broadcastable') and new.broadcastable == (False,)
               and all(is_clonable(o) for o in old)):  # vector type of arbitrary dtype
             print "fancy reshaping"
-            old_cp = [clone(o) for o in old]  # we need copy as new gets proxified later on
+            old_cp = [clone(o) for o in old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
             new = list(complex_reshape(new, old_cp))
-            # note that there is no fancy reshaping of
         else:
             singleton = True
             new = [new]
@@ -249,7 +254,8 @@ def merge_key(models, key="parameters"):
     """ simply combines all model[key] values for model in models """
     parameters = []
     for g in models:
-        parameters += g[key]
+        if key in g:
+            parameters += g[key]
     # return [p for p in parameters if isinstance(p, SharedVariable)]
     return parameters  # no filtering for SharedVariable possible as everything is theano variable (maybe constant variable)
 
@@ -263,16 +269,24 @@ def merge_inputs(models, key="inputs"):
 
 
 class Merge(Model):
-    """ This class is only for convenience and suggestion.
+    """ This class is merely for convenience and suggestion.
+
     simple manual version::
     >>> merged_ = {k:merge_key(models, k) for k in ('parameters', 'parameters_positive', 'inputs'}
     >>> merged = Model(**update(merged_, models[0], overwrite=False)
     or with alternativ ending
     >>> merged = Model(**update(dict(models[0]), merged_))
     which is shorter, but with slight copy overhead.
+
+
     """
     def __init__(self, *models, **merge_rules):
         """
+        inputs, parameters and parameters_positive are merged by default if not overwritten in merge_rules
+        first model is regarded as Like model
+
+        If you don't want this behaviour consider using Model directly to create new models.
+
         Parameters
         ----------
         model_type : model class
@@ -283,14 +297,24 @@ class Merge(Model):
         merge_rules: dictionary of functions working on models
             mapping merge_key to merger
         """
-        if not merge_rules:  # manual empty merge rule makes no sense if we want to merge, hence this means use default
-            merge_rules = {
+        update(merge_rules, {
                 'parameters': merge_key,
                 'parameters_positive': partial(merge_key, key="parameters_positive"),
                 'inputs': merge_inputs,
-            }  # python 3 keyword arg alternative
+            }, overwrite=False)
 
-        merged = {k: m(models) for k, m in merge_rules.iteritems()}
-        fmap(remove_duplicates, merged)
-        update(merged, models[0], overwrite=False)
-        super(Merge, self).__init__(**merged)
+        merged_references = {}
+        for k, m in merge_rules.iteritems():
+            if hasattr(m, '__call__'):
+                merged_references[k] = m(models)
+            else:
+                merged_references[k] = m
+
+        for m in merged_references.itervalues():
+            if isinstance(m, Sequence):
+                remove_duplicates(m)
+
+        update(merged_references, models[0], overwrite=False)
+        super(Merge, self).__init__(**merged_references)
+
+

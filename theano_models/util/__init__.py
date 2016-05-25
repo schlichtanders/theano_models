@@ -3,6 +3,7 @@
 from itertools import izip
 import theano.tensor as T
 from theano_helpers import as_tensor_variable, clone, is_clonable, clone_all  # because this is so central
+from collections import Sequence
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 from schlichtanders.mylists import remove_duplicates
@@ -57,7 +58,7 @@ def reparameterize_map(f, finv):
                                     "If you used this within ``Model.map`` you probably have to completely reinitialize"
                                     "the model now, as some parameters got proxified, others not")
         cp_param = clone(param)
-        cp_param.name = (cp_param.name or str(cp_param)) + "_copy"
+        cp_param.name = (cp_param.name or str(cp_param))  # + "_copy"
         new_param = finv(cp_param)  # clone is decisive as we otherwise get an infinite reference loop
         new_param.name = cp_param.name + "_" + f.func_name
         proxified_param = f(new_param)
@@ -105,7 +106,10 @@ reshape helpers
 
 
 def total_size(variables):
-    return sum(v.size for v in variables)
+    """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
+    if not isinstance(variables, Sequence):
+        variables = [variables]
+    return sum(clone(v).size for v in variables)
 
 
 def complex_reshape(vector, variables):

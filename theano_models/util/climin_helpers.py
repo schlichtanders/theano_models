@@ -12,6 +12,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 CTRL_C_FLAG = False
 
+
 def run_optimizer(optimizer, stop, report, extra_logging=None):
     """
     Denote the iterative output with ``info`` in the following
@@ -60,7 +61,6 @@ def extra_logging_scores(score, val_data, train_data=None):
         info['best_pars'] = ns.best_pars
 
     return extra_logging
-
 
 
 def _ctrl_c_handler(self, signal, frame):

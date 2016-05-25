@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import theano
+from theano import gof
 import theano.tensor as T
 from base import Model, models_as_outputs
+from collections import Sequence
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 
@@ -118,6 +120,10 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
 
     # Preprocess args
     # ---------------
+    if not isinstance(Xs, Sequence):
+        Xs = [Xs]
+    if priors is not None and not isinstance(priors, Sequence):
+        priors = [priors]
 
     # if kl is not given we default to the approximation of the Variational Lower Bound found in equation (2) of the
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"

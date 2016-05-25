@@ -5,7 +5,7 @@ from base import Model, reset_eval, Merge, merge_key, merge_inputs
 from placeholders import Placeholder
 
 # standard helpers
-from util import as_tensor_variable, clone, is_clonable
+from util import as_tensor_variable, clone, is_clonable, clone_all
 # standard norms and distances
 from util import norm_distance, L1, L2
 # reparameterization

@@ -166,11 +166,11 @@ class DiagGaussianNoise(Model):
         """
         if input is None:
             input = T.dvector(name="input")
+        if isinstance(input, Model):
+            input = input['outputs']
 
         if init_var is None:
             init_var = T.ones(input.shape, dtype=config.floatX)
-        else:
-            init_var = np.asarray(init_var, dtype=config.floatX)
             # TODO ensure that input does not get another shape!!!
 
         self.rng = RandomStreams() if rng is None else rng
@@ -244,16 +244,14 @@ class DiagGauss(Model):
             raise ValueError("means and variances need to be of same length")
 
         if init_mean is not None:
-            init_mean = np.asarray(init_mean, dtype=config.floatX)
             output_size = len(init_mean)
         if init_var is not None:
-            init_var = np.asarray(init_var, dtype=config.floatX)
             output_size = len(init_var)
 
         if init_mean is None:
-            init_mean = np.zeros(output_size, dtype=config.floatX)
+            init_mean = T.zeros((output_size,), dtype=config.floatX)
         if init_var is None:
-            init_var = np.ones(output_size, dtype=config.floatX)
+            init_var = T.ones((output_size,), dtype=config.floatX)
 
         # main part
         # ---------

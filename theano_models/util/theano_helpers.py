@@ -21,6 +21,7 @@ from theano.tensor.basic import as_tensor_variable as _as_tensor_variable
 from functools import wraps
 from theano.scan_module.scan_utils import DEPRECATED_ARG
 from copy import deepcopy, copy
+from time import time
 
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -46,9 +47,11 @@ def as_tensor_variable(x, name=None, ndim=None):
     if not isinstance(x, Variable):
         x = np.array(x, copy=False, dtype=config.floatX)
     ret = _as_tensor_variable(x, name, ndim)
+    if name is not None:  # this seems not be the case
+        ret.name = name
     if isinstance(ret, TensorConstant):
         quasi_constant = T.tensor_copy(ret)
-        quasi_constant.name = ret.name
+        quasi_constant.name = ret.name if ret.name is not None else str(ret)
         return quasi_constant  # tensor_copy is only a (bad) name for tensor_identity
     else:
         return ret
@@ -76,6 +79,7 @@ print n.eval(), m.eval(), o.eval(), p.eval()
 proxify(n, p)
 print n, n.eval()
 """
+
 
 @wraps(_clone)
 def clone(output,
@@ -106,46 +110,66 @@ theano graph helpers
 
 
 def clone_all(outputs):
-    """ cloning dependent variables needs care of nesting
-
-    Parameters
-    ----------
-    outputs : list of theano variables
-        to be copied
-
-    Returns
-    -------
-    copies
-    """
-    sort_idx = sort_dependent_last(outputs, return_idx=True)
-    copies = [None]*len(outputs)
-    for i in sort_idx:
-        # replace all nested dependencies with the respective copies (valid by previous sorting)
-        copies[i] = clone(outputs[i], replace={o: cp for o, cp in izip(outputs, copies) if cp is not None})
-    return copies
+    to_be_cloned = list(outputs)
+    copies = {}
+    while to_be_cloned:
+        clone_recursive(to_be_cloned.pop(), to_be_cloned, copies, outputs)
+    return [copies[o] for o in outputs]
 
 
-def gen_nodes(initial_variables, filter=lambda n:True):
+def clone_recursive(o, to_be_cloned, copies, outputs):
+    dependencies = {}
+    for v in gen_variables(o, yield_on=lambda v: v in outputs, stop_on=lambda v: v in outputs):
+        if v in to_be_cloned:
+            to_be_cloned.remove(v)
+            dependencies[v] = clone_recursive(v, to_be_cloned, copies, outputs)
+        else:
+            dependencies[v] = copies[v]
+    o_cp = clone(o, replace=dependencies)
+    o_cp.name = (o.name or str(o)) + "_copy"
+    copies[o] = o_cp
+    return o_cp
+
+
+def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: False):
     if not isinstance(initial_variables, Sequence):
         initial_variables = [initial_variables]
     for v in initial_variables:
-        if filter(v.owner):
-            yield v.owner
         if v.owner is not None:
-            for n in gen_nodes(v.owner.inputs, filter=filter):  # yield from
+            for n in _gen_nodes(v.owner.inputs, yield_on=yield_on, stop_on=stop_on):  # yield from
                 yield n
 
 
-def gen_variables(initial_variables, filter=lambda v:v.owner is None):
+def _gen_nodes(rec_variables, yield_on=lambda n: True, stop_on=lambda v: False):
+    for v in rec_variables:
+        if yield_on(v.owner):
+            yield v.owner
+        if stop_on(v.owner):
+            return
+        if v.owner is not None:
+            for n in _gen_nodes(v.owner.inputs, yield_on=yield_on, stop_on=stop_on):  # yield from
+                yield n
+
+
+def gen_variables(initial_variables, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
+    """ first level is not tested """
     if not isinstance(initial_variables, Sequence):
         initial_variables = [initial_variables]
     for v in initial_variables:
-        if filter(v):
-            yield v
         if v.owner is not None:
-            for _v in gen_variables(v.owner.inputs, filter=filter): #yield from
+            for _v in _gen_variables(v.owner.inputs, yield_on=yield_on, stop_on=stop_on):  #yield from
                 yield _v
 
+
+def _gen_variables(rec_variables, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
+    for v in rec_variables:
+        if yield_on(v):
+            yield v
+        if stop_on(v):
+            return
+        if v.owner is not None:
+            for _v in _gen_variables(v.owner.inputs, yield_on=yield_on, stop_on=stop_on):  #yield from
+                yield _v
 
 
 def is_clonable(variable):

@@ -85,7 +85,7 @@ class AffineNonlinear(Model):
         if input is None:
             input = T.dvector()
         elif isinstance(input, Model):
-            input = Model['output']
+            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -98,7 +98,7 @@ class AffineNonlinear(Model):
         self.weights.name = "weights"
         self.bias = as_tensor_variable(np.zeros(output_size), "bias")
 
-        output = self.transfer(T.dot(input, self.weights) + self.bias)
+        output = self.transfer(T.dot(input, self.weights) + self.bias).flatten()  # for some reason I get a matrix here and not a vector
 
         super(AffineNonlinear, self).__init__(
             inputs=[input],
@@ -113,7 +113,7 @@ class Mlp(Model):
         if input is None:
             input = T.dvector()
         elif isinstance(input, Model):
-            input = Model['output']
+            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -217,13 +217,13 @@ class InvertibleModel(Model):
         # f(finv(x)) = x
         elif self['inputs'] == [self['inverse_outputs']]:
             # make identity function:
-            self['outputs'] = self['inverse_inputs'][0]
+            self['outputs'] = self['inverse_inputs']
             self['inputs'] = self['inverse_inputs']  # implies self['inverse_outputs] = self['inverse_inputs']
             changed = True
         # finv(f(x)) = x
         elif self['inverse_inputs'] == [self['outputs']]:
-            # make identity function:
-            self['inverse_outputs'] = self['inputs'][0]
+            # make identity function:clone,
+            self['inverse_outputs'] = self['inputs']
             self['inverse_inputs'] = self['inputs']  # implies self['outputs] = self['inputs']
             changed = True
         return changed
@@ -244,7 +244,7 @@ class PlanarTransform(InvertibleModel):
         if input is None:
             input = T.dvector(name="z")
         elif isinstance(input, Model):
-            input = Model['output']
+            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -269,7 +269,7 @@ class PlanarTransform(InvertibleModel):
         super(PlanarTransform, self).__init__(
             inputs=[input],
             outputs=f,
-            parameters=[self.b, self.w, self.u],
+            parameters=[self.b, self.w, self._u],
             norm_det=norm_det
         )
 
@@ -289,7 +289,7 @@ class RadialTransform(InvertibleModel):
         if input is None:
             input = T.dvector(name="z")
         elif isinstance(input, Model):
-            input = Model['output']
+            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
