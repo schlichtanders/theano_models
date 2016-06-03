@@ -8,3 +8,4 @@
 *.pkl
 data/year
 *.egg-info
+*/tmp/
