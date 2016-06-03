@@ -1,6 +1,8 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import division
+import operator as op
+from functools import wraps
 import theano
 from theano import gof
 import theano.tensor as T
@@ -12,6 +14,7 @@ from schlichtanders.mydicts import PassThroughDict, DefaultDict
 from schlichtanders.mylists import deepflatten
 from schlichtanders.mynumpy import complex_reshape
 from schlichtanders.mymeta import proxify
+from schlichtanders.myfunctools import fmap
 
 from util import norm_distance, L2, clone, clone_all, as_tensor_variable
 from util.theano_helpers import is_clonable, gen_variables, sort_dependent_last, get_dependencies
@@ -356,7 +359,8 @@ def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={}
 
 def flat_numericalize_postmap(model,
                               annealing=False, wrapper=None, wrapper_kwargs={},
-                              save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps):
+                              save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps,
+                              profile=False):
     """ postmap to offer an interface for standard numerical optimizer
 
     'loss' and etc. must be available in the model
@@ -388,12 +392,12 @@ def flat_numericalize_postmap(model,
         raise ValueError("Need ``initial_inputs`` to prevent subtle bugs. If really no inputs are needed, please supply"
                          "empty list [] as kwarg.")
     if wrapper is None:
-        if not annealing:
+        if annealing:
+            def wrapper(fs, **wrapper_kwargs):
+                return fmap(op.add, *fs)
+        else:
             def wrapper(f, **wrapper_kwargs):
                 return f
-        else:
-            def wrapper(fs, **wrapper_kwargs):
-                return sum(fs)
 
     parameters = model['parameters'][0]
     derivatives = {
@@ -404,7 +408,8 @@ def flat_numericalize_postmap(model,
 
     def function(outputs):
         """ compiles function with signature f(params, *loss_inputs) """
-        return theano.function([parameters] + model['loss_inputs'], outputs, on_unused_input="warn")
+        return theano.function([parameters] + model['loss_inputs'], outputs,
+                               on_unused_input="warn", allow_input_downcast=True, profile=profile)
 
     def numericalize(key):
         try:
@@ -420,7 +425,7 @@ def flat_numericalize_postmap(model,
             # for now we ignore this
             raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
 
-    num_parameters = theano.function(model['inputs'], parameters, on_unused_input='warn')(*initial_inputs)
+    num_parameters = theano.function(model['inputs'], parameters, on_unused_input='ignore')(*initial_inputs)
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=lambda key: wrapper(numericalize(key), **wrapper_kwargs),
         default_setitem=lambda key, value: NotImplementedError("You cannot set items on a numericalize postmap."),
@@ -511,7 +516,9 @@ def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
                 _f = f(*initial_inputs)
                 flat_num, shapes_num = _f[0], _f[1:]
                 flat = as_tensor_variable(flat_num)
-                flat.name = ":".join((p.name or str(p)) for p in model[key])
+                # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
+                # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
+                flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in model[key])
 
                 i = 0
                 for p, shape in izip(model[key], shapes_num):

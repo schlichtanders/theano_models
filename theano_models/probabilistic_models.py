@@ -15,6 +15,8 @@ from util import as_tensor_variable
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+#: global random number generator used by default:
+RNG = RandomStreams()
 
 """
 Probabilistic Modelling
@@ -146,8 +148,8 @@ class DiagGaussianNoise(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-
-    def __init__(self, input=None, init_var=None, rng=None):
+    @models_as_outputs
+    def __init__(self, input=None, init_var=None, rng=RNG):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -166,17 +168,13 @@ class DiagGaussianNoise(Model):
         """
         if input is None:
             input = T.dvector(name="input")
-        if isinstance(input, Model):
-            input = input['outputs']
-
         if init_var is None:
             init_var = T.ones(input.shape, dtype=config.floatX)
             # TODO ensure that input does not get another shape!!!
 
-        self.rng = RandomStreams() if rng is None else rng
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * noise  # random sampler
 
         @models_as_outputs
@@ -219,8 +217,8 @@ class DiagGauss(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-
-    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None):
+    @models_as_outputs
+    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=RNG):
         """Initialise a DiagGauss random variable with given mean and variance.
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -264,9 +262,50 @@ class DiagGauss(Model):
         super(DiagGauss, self).__init__(**kwargs)
 
 
+class Categorical(Model):
+        """Class representing a Categorical distribution.
+
+        Attributes
+        ----------
+
+        probs: Theano variable
+            Has the same shape as the distribution and contains the probability of
+            the element being 1 and all others being 0. I.e. rows sum up to 1.
+
+        """
+        @models_as_outputs
+        def __init__(self, probs, rng=RNG, eps=1e-8):
+            """Initialize a Categorical object.
+
+            Parameters
+            ----------
+
+            probs : Theano variable
+                Gives the shape of the distribution and contains the probability of
+                an element being 1, where only one of a row will be 1. Rows sum up
+                to 1.
+
+            rng : Theano RandomStreams object, optional.
+                Random number generator to draw samples from the distribution from.
+            """
+            self.probs = probs
+            self._props = T.clip(self.probs, eps, 1 - eps)
+
+            @models_as_outputs
+            def logP(rv):
+                return T.sum(rv * T.log(self._props))
+
+            super(Categorical, self).__init__(
+                inputs=[],
+                outputs=rng.multinomial(pvals=self.probs),
+                logP=logP
+            )
+
+
 class Uniform(Model):
 
-    def __init__(self, output_size=1, init_start=None, init_offset=None, rng=None):
+    @models_as_outputs
+    def __init__(self, output_size=1, init_start=None, init_offset=None, rng=RNG):
         """ Initialise a uniform random variable with given range (by start and offset).
 
         Start default to 0, and offset to 1, if not further specified, i.e. standard uniform random variable.
@@ -305,12 +344,10 @@ class Uniform(Model):
         if (init_offset <= 0).any():
             raise ValueError("offset must be positive")
 
-        self.rng = RandomStreams() if rng is None else rng
-
         self.start = as_tensor_variable(init_start, "start")  # TODO broadcastable?
         self.offset = as_tensor_variable(init_offset, "offset")  # TODO broadcastable?
 
-        noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        noise = rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = noise * self.offset + self.start  # random sampler
 
         @models_as_outputs

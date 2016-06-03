@@ -80,12 +80,11 @@ MLP
 
 class AffineNonlinear(Model):
 
+    @models_as_outputs
     def __init__(self, output_size, input=None, transfer='identity'):
         # input needs to be vector
         if input is None:
             input = T.dvector()
-        elif isinstance(input, Model):
-            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -109,11 +108,10 @@ class AffineNonlinear(Model):
 
 class Mlp(Model):
 
+    @models_as_outputs
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
             input = T.dvector()
-        elif isinstance(input, Model):
-            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -147,6 +145,7 @@ class InvertibleModel(Model):
 
     INVERTIBLE_MODELS = []
 
+    @models_as_outputs
     def __init__(self, inputs, outputs, parameters, inverse_outputs=None, inverse_inputs=None, norm_det=None, **further_references):
         # TODO support multiple inputs
         """
@@ -240,11 +239,10 @@ class InvertibleModel(Model):
 class PlanarTransform(InvertibleModel):
     """ invertable transformation, unfortunately without symbolic inverse """
 
+    @models_as_outputs
     def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
         if input is None:
             input = T.dvector(name="z")
-        elif isinstance(input, Model):
-            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -276,6 +274,7 @@ class PlanarTransform(InvertibleModel):
 
 class RadialTransform(InvertibleModel):
 
+    @models_as_outputs
     def __init__(self, input=None, init_alpha=1, init_beta=1, init_z0=None):
         """
 
@@ -288,8 +287,6 @@ class RadialTransform(InvertibleModel):
         # TODO raise error for non-valid init_beta or init_alpha!
         if input is None:
             input = T.dvector(name="z")
-        elif isinstance(input, Model):
-            input = input['outputs']
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
