@@ -22,7 +22,14 @@ from functools import wraps
 from theano.scan_module.scan_utils import DEPRECATED_ARG
 from copy import deepcopy, copy
 from time import time
+from theano.compile.builders import OpFromGraph
+import inspect
+from theano.compile.function_module import FunctionMaker
+from theano.compile import SharedVariable, rebuild_collect_shared
 
+
+from theano.compile.function_module import orig_function
+from theano.compile import builders
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -103,6 +110,89 @@ def clone(output,
           copy_inputs=copy_inputs)
 
 
+
+""" monkey patch OpFromGraph to support outer input arguments """
+
+
+def OpFromGraph__init__(self, inputs, outputs, **kwargs):
+    if not isinstance(outputs, list):
+        raise TypeError('outputs must be list', outputs)
+    for i in inputs + outputs:
+        if not isinstance(i, gof.Variable):
+            raise TypeError(
+                'inputs and outputs must be Variable instances', i)
+    if 'updates' in kwargs or 'givens' in kwargs:
+        raise TypeError('updates and givens are not allowed in kwargs')
+
+    # To support correctly shared variables the inner fct should
+    # not see them. Otherwise their is problem with the gradient.
+    self.shared_inputs = [var for var in gof.graph.inputs(outputs)
+                          if isinstance(var, SharedVariable)]
+    shared_vars = [var.type() for var in self.shared_inputs]
+    new = rebuild_collect_shared(outputs, inputs=inputs + shared_vars,
+                                 replace=dict(izip(self.shared_inputs,
+                                                   shared_vars)),
+                                 copy_inputs_over=False)
+    (new_inputs, new_outputs,
+     [clone_d, update_d, update_expr, shared_inputs]) = new
+    assert len(new_inputs) == len(inputs) + len(self.shared_inputs)
+    assert len(new_outputs) == len(outputs)
+    assert not update_d
+    assert not update_expr
+    assert not shared_inputs
+
+    self.clone_d = clone_d
+    self.new_inputs = new_inputs
+    self.new_outputs = new_outputs
+    self.inputs = inputs
+    self.outputs = outputs
+    self.on_unused_input = kwargs.pop("on_unused_input", 'warn')  # needs to be set for extra input arguments to work
+    self.kwargs = kwargs
+    self.input_types = [input.type for input in inputs]
+    self.output_types = [output.type for output in outputs]
+
+
+def OpFromGraph_make_thunk(self, node, storage_map, compute_map, no_recycling):
+    clone_to_true = {}
+    # frame hack (would be better to have a clone_d object directly or something like that):
+    for f in inspect.stack():
+        frame_locals = f[0].f_locals
+        # print(frame_locals)
+        # if 'clone_d' in frame_locals:
+        #     print("clone_d", {"%s%i"%(k, hash(k)): hash(v) for k, v in frame_locals['clone_d'].iteritems()})
+        #     # this shows that inputs are not cloned here!
+        if 'self' in frame_locals and isinstance(frame_locals['self'], FunctionMaker):
+            true_inputs = [i.variable for i in frame_locals['self'].inputs]
+            cloned_inputs = frame_locals['self'].fgraph.inputs
+            clone_to_true = dict(zip(cloned_inputs, true_inputs))
+            # print("my clone mapping", {"%s%i" % (k, hash(k)): hash(v) for k, v in my_clone_mapping.iteritems()})
+            # print()
+
+    extra_inputs = [k for k, v in compute_map.iteritems()
+                    if v[0] and k in clone_to_true and clone_to_true[k] in self.clone_d]
+    node.inputs += extra_inputs  # node uses same variables as compute_map
+    # print("extra_inputs", extra_inputs, map(hash, extra_inputs))
+    # true_extra_inputs = [clone_to_true[i] for i in extra_inputs]
+    # print("true_extra_inputs", true_extra_inputs, map(hash, true_extra_inputs))
+    # new_extra_inputs = [self.clone_d[t] for t in true_extra_inputs]
+
+    # however OpFromGraph uses different variables like follows:
+    new_extra_inputs = [self.clone_d[clone_to_true[i]] for i in extra_inputs]
+
+    ret = super(OpFromGraph, self).make_thunk(node, storage_map,
+                                              compute_map, no_recycling)
+    if not hasattr(self, "fn"):
+        self.fn = orig_function(self.new_inputs + new_extra_inputs,
+                                self.new_outputs,
+                                on_unused_input=self.on_unused_input,
+                                **self.kwargs)
+    return ret
+
+
+OpFromGraph.__init__ = OpFromGraph__init__
+OpFromGraph.make_thunk = OpFromGraph_make_thunk
+
+
 """
 theano graph helpers
 --------------------
@@ -172,6 +262,7 @@ def _gen_variables(rec_variables, yield_on=lambda v: v.owner is None, stop_on=la
                 yield _v
 
 
+GroundedVariableType = (gof.graph.Constant, SharedVariable)
 def is_clonable(variable):
     return variable.owner is not None or isinstance(variable, GroundedVariableType)
 
