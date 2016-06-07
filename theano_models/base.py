@@ -21,7 +21,7 @@ from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
-from util import complex_reshape, clone, as_tensor_variable
+from util import complex_reshape, clone, as_tensor_variable, reparameterize
 from util.theano_helpers import is_clonable
 import types
 
@@ -261,6 +261,19 @@ def merge_key(models, key="parameters"):
             parameters += g[key]
     # return [p for p in parameters if isinstance(p, SharedVariable)]
     return parameters  # no filtering for SharedVariable possible as everything is theano variable (maybe constant variable)
+
+
+def merge_key_reparam(models, f, finv, key="parameters", key_reparam="parameters_positive"):
+    return merge_key(models, key) + reparameterize(merge_key(models, key_reparam), f, finv)
+
+
+def pmerge_key_reparam(f, finv, **outer_kwargs):
+    def _merge_key_reparam(models, **inner_kwargs):
+        update(inner_kwargs, outer_kwargs, overwrite=False)
+        return merge_key_reparam(models, f, finv, **inner_kwargs)
+    return _merge_key_reparam
+
+    return merge_key(models, key) + reparameterize(merge_key(models, key_reparam), f, finv)
 
 
 def merge_inputs(models, key="inputs"):

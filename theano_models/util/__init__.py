@@ -36,27 +36,32 @@ def squareplus_inv(x, module=T):
     return module.sqrt(x - eps)
 
 
-def reparameterize_map(f, finv):
+def reparameterize(parameters, f, finv):
     """
-    use e.g. like
-    >>> model.map("parameters_positive", reparameterize_map(softplus, softplusinv), "parameters")
+    use e.g. within a Merge
+    >>> reparameterize(model['parameters_positive'], softplus, softplusinv)
+    to get new parameters
 
     new_param = finv(param)
         param = f(new_param)
 
     Parameters
     ----------
+    parameters : list of theano variables
+        to be reparameterized
     f : function theano_variable -> theano_variable
     finv : function theano_variable -> theano_variable
 
     Returns
     -------
-        mappable function
+    new underlying parameters
+    (i.e. NOT the reparameterized parameters, they are substituted, i.e. references still hold)
     """
-    def reparameterize(param):
-        assert is_clonable(param), ("Can only flatten clonable parameters."
-                                    "If you used this within ``Model.map`` you probably have to completely reinitialize"
-                                    "the model now, as some parameters got proxified, others not")
+    assert all(is_clonable(param) for param in parameters), (
+        "Can only flatten clonable parameters."
+    )
+    new_underlying_parameters = []
+    for param in parameters:
         cp_param = clone(param)
         cp_param.name = (cp_param.name or str(cp_param))  # + "_copy"
         new_param = finv(cp_param)  # clone is decisive as we otherwise get an infinite reference loop
@@ -64,8 +69,8 @@ def reparameterize_map(f, finv):
         proxified_param = f(new_param)
         proxified_param.name = (param.name or str(param)) + "_reparam"
         proxify(param, proxified_param)
-        return new_param  # instead of old parameter, now refer directly to the new underlying parameter
-    return reparameterize
+        new_underlying_parameters.append(new_param)
+    return new_underlying_parameters
 
 
 """
