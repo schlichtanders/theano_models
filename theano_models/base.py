@@ -23,6 +23,7 @@ from schlichtanders.myfunctools import fmap
 
 from util import complex_reshape, clone, as_tensor_variable
 from util.theano_helpers import is_clonable
+import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -40,6 +41,8 @@ class Model(MutableMapping):
     With this, Models are intended to be composable, namely by mapping ``model1['outputs'] -> model2['inputs']``
     and so on.
     """
+
+    ALLOWED_VALUETYPES = gof.Variable, types.FunctionType
 
     def __init__(self, outputs, inputs=None, **further_references):
         """
@@ -102,10 +105,7 @@ class Model(MutableMapping):
             try:
                 new = as_tensor_variable(new)
             except TypeError:
-                # default to direct assignment
-                warnings.warn("non theano value, overwriting key directly")
-                self.references[key] = new
-                return
+                pass
 
         if isinstance(new, Sequence):
             # if there are models, recognize them and use there outputs
@@ -121,24 +121,35 @@ class Model(MutableMapping):
         elif (hasattr(new, 'broadcastable') and new.broadcastable == (False,)
               and all(is_clonable(o) for o in old)):  # vector type of arbitrary dtype
             print "fancy reshaping"
-            old_cp = [clone(o) for o in old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
+            old_cp = [clone(o) for o in
+                      old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
             new = list(complex_reshape(new, old_cp))
         else:
             singleton = True
             new = [new]
 
-
         # check args
         # ==========
-        if len(old) != len(new):
-            warnings.warn("No substitution as length of `self[key]` (%s) and `new`(%s) differ. Key is simply replaced." % (len(old), len(new)))
+
+        assert len(old) == len(new), "No substitution as length of `self[%s]` (%s) and `new`(%s) differ" % (
+            key, len(old), len(new))
+        # if len(old) != len(new):
+        #     raise TypeError()
+        #     warnings.warn("No substitution as length of `self[key]` (%s) and `new`(%s) differ. Key is simply replaced." % (len(old), len(new)))
+        #     self.references[key] = new[0] if singleton else new
+        #     return
+
+        # the only exception to substitution is if other variables are stored
+        # which by default guarantee correct referencess (e.g. Functions)
+        if any(not isinstance(o, theano.gof.Variable)
+               and isinstance(n, self.ALLOWED_VALUETYPES)
+               for o, n in zip(old, new)):
+            info = "No substitution as `self[%s]` is not a theano.gof.Variable. Key is simply replaced." % key
+            print info  # warnings.warn(info)
             self.references[key] = new[0] if singleton else new
             return
-        if not isinstance(old[0], theano.gof.Variable):  # TODO assumption that a key has uniform class
-            warnings.warn("No substitution as `self[key]` is not a theano.gof.Variable. Key is simply replaced.")
-            self.references[key] = new[0] if singleton else new
-            return
-        assert all(o.type == n.type for o, n in izip(old, new))
+
+        assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as length theano types differ"
 
         # core substitution
         # =================
@@ -147,41 +158,32 @@ class Model(MutableMapping):
         # make sure that simply all cached compiled functions get destroyed, as references are no longer valid
         reset_eval(self)
 
+    @models_as_outputs
     def __setitem__(self, key, value):
         """ convenience access to substitute_key """
         if key in self:
             self.substitute_key(key, value)
         else:
-            if isinstance(value, Model):
-                value = value['outputs']
+            if not isinstance(value, self.ALLOWED_VALUETYPES):
+                raise TypeError(
+                    "The type of the given value is not supported. You may change ``Model.ALLOWED_VALUETYPES`` if you know what your doing.")
             self.references[key] = value
 
-    def __call__(self, *inputs):
-        """ CAUTION: works inplace
+    # def __call__(self, *inputs):
+    #     """ CAUTION: works inplace
+    #
+    #     Parameters
+    #     ----------
+    #     inputs : list of input
+    #         must match self['inputs'] theano expressions
+    #
+    #     Returns
+    #     -------
+    #     outputs
+    #     """
+    #     self['inputs'] = inputs
+    #     return self['outputs']
 
-        Parameters
-        ----------
-        inputs : list of input
-            must match self['inputs'] theano expressions
-
-        Returns
-        -------
-        outputs
-        """
-        self['inputs'] = inputs
-        return self['outputs']
-
-    def map(self, key, f, append_key=None):
-        """ adds ``f(var)`` to ``self[append_key]``  for each ``var in self[key]``
-
-        if ``append_key`` is None, then the results won't be added anywhere, only f is called
-        """
-        new = map(f, self[key])
-        if append_key is not None:
-            try:
-                self[append_key] += new
-            except KeyError:
-                self[append_key] = new
 
     # Mappings Interface
     # ------------------
@@ -190,6 +192,7 @@ class Model(MutableMapping):
         return self.references[item]
 
     def __delitem__(self, key):
+        # TODO should delete be allowed? seems like producing bugs in that references can be deleted and added anew, e.g. with different lengths
         del self.references[key]
 
     def __iter__(self):
