@@ -113,7 +113,6 @@ def clone(output,
 
 """ monkey patch OpFromGraph to support outer input arguments """
 
-
 def OpFromGraph__init__(self, inputs, outputs, **kwargs):
     if not isinstance(outputs, list):
         raise TypeError('outputs must be list', outputs)
@@ -168,17 +167,19 @@ def OpFromGraph_make_thunk(self, node, storage_map, compute_map, no_recycling):
             # print("my clone mapping", {"%s%i" % (k, hash(k)): hash(v) for k, v in my_clone_mapping.iteritems()})
             # print()
 
-    extra_inputs = [k for k, v in compute_map.iteritems()
-                    if v[0] and k in clone_to_true and clone_to_true[k] in self.clone_d]
+    extra_inputs = []
+    new_extra_inputs = []
+    for k, v in compute_map.iteritems():
+        if v[0]:  # v is singleton list with boolean whether the variable is already computed
+            try:
+                new = self.clone_d[clone_to_true[k]]
+                if new not in self.new_inputs:
+                    extra_inputs.append(k)
+                    new_extra_inputs.append(new)
+            except KeyError:
+                pass
+
     node.inputs += extra_inputs  # node uses same variables as compute_map
-    # print("extra_inputs", extra_inputs, map(hash, extra_inputs))
-    # true_extra_inputs = [clone_to_true[i] for i in extra_inputs]
-    # print("true_extra_inputs", true_extra_inputs, map(hash, true_extra_inputs))
-    # new_extra_inputs = [self.clone_d[t] for t in true_extra_inputs]
-
-    # however OpFromGraph uses different variables like follows:
-    new_extra_inputs = [self.clone_d[clone_to_true[i]] for i in extra_inputs]
-
     ret = super(OpFromGraph, self).make_thunk(node, storage_map,
                                               compute_map, no_recycling)
     if not hasattr(self, "fn"):
