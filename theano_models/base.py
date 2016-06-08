@@ -22,10 +22,34 @@ from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
 from util import complex_reshape, clone, as_tensor_variable, reparameterize
-from util.theano_helpers import is_clonable
+from util.theano_helpers import is_clonable, get_inputs
 import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
+
+
+
+"""
+decorator helper
+----------------
+"""
+
+@wrapt.decorator
+def models_as_outputs(wrapped, instance, args, kwargs):
+    def to_output(m):
+        if isinstance(m, Sequence) and any(isinstance(n, Model) for n in m):
+            return map(to_output, m)
+        elif isinstance(m, Model):
+            return m['outputs']
+        else:
+            return m
+    return wrapped(*map(to_output, args), **fmap(to_output, kwargs))
+
+
+"""
+core class
+----------
+"""
 
 
 class Model(MutableMapping):
@@ -44,6 +68,7 @@ class Model(MutableMapping):
 
     ALLOWED_VALUETYPES = gof.Variable, types.FunctionType
 
+    @models_as_outputs
     def __init__(self, outputs, inputs=None, **further_references):
         """
         Constructs a Model by directly referencing outputs and inputs, and further_references
@@ -55,21 +80,20 @@ class Model(MutableMapping):
             functional like outputs
         inputs: list of theano expressions (or exceptionally also single expression)
             functional like inputs
-            if not given explicitly ``inputs`` get set to ``theano.gof.graph.inputs(outputs)``
+            if not given explicitly ``inputs`` get set to ``theano_models.util.theano_helpers.get_inputs(outputs)``
         further_references: kwargs of string: (theano expressions, or lists thereof)
             possible further references
         """
-        if isinstance(outputs, Model):
-            outputs = outputs['outputs']
-        if isinstance(inputs, Model):
-            inputs = Model['outputs']
         if inputs is not None and not isinstance(inputs, Sequence):
             warnings.warn("Detected singleton input and wrapped it to ``inputs = [input]``.")
             inputs = [inputs]
 
+        _outputs = outputs if isinstance(outputs, Sequence) else [outputs]
+        if inputs is None:
+            inputs = get_inputs(_outputs)
         self.references = {
             'outputs': outputs,
-            'inputs': gof.graph.inputs(outputs) if inputs is None else inputs,
+            'inputs': inputs,
         }
         self.references.update(further_references)
 
@@ -169,6 +193,7 @@ class Model(MutableMapping):
                     "The type of the given value is not supported. You may change ``Model.ALLOWED_VALUETYPES`` if you know what your doing.")
             self.references[key] = value
 
+    # #deprecated as the call might once work like in theano.OpFromGraph
     # def __call__(self, *inputs):
     #     """ CAUTION: works inplace
     #
@@ -200,6 +225,15 @@ class Model(MutableMapping):
 
     def __len__(self):
         return len(self.references)
+
+    # hashable interface
+    # ------------------
+
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return hash(self) == hash(other)
 
     # visualization interface
     # -----------------------
@@ -235,17 +269,6 @@ def reset_eval(var):
             del var._fn_cache
     # everything else does not need to be reset
 
-
-"""
-decorator helper
-----------------
-"""
-
-@wrapt.decorator
-def models_as_outputs(wrapped, instance, args, kwargs):
-    def to_output(m):
-        return m['outputs'] if isinstance(m, Model) else m
-    return wrapped(*map(to_output,args), **fmap(to_output, kwargs))
 
 """
 Merge helpers
