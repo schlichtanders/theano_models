@@ -34,11 +34,12 @@ def normalizing_flow(invertible_model, base_prob_model):
     invertible_model : InvertibleModel
         invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
     """
-    invertible_model(base_prob_model)  # output not needed, but assigns input
+    invertible_model['inputs'] = base_prob_model
     @models_as_outputs
     def normalized_flow(y):
-        # equation (5)
-        return base_prob_model['logP'](invertible_model.inv(y)) - T.log(abs(invertible_model['norm_det']))
+        inv = invertible_model.inv
+        inv['inputs'] = y
+        return base_prob_model['logP'](inv) - T.log(abs(invertible_model['norm_det'])) # equation (5)
 
     invertible_model['logP'] = normalized_flow
     return invertible_model

@@ -255,6 +255,7 @@ class MyPyDotFormatter(object):
         for m in sub_models:
             models.remove(m)
         for m in sub_models:
+            print("model", m, sub_models)
             self.make_nested_model(m, models=models, profile=profile, dot_graph=dot_graph, **sub_models[m])
 
         return dot_graph
