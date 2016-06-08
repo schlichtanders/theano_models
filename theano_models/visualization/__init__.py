@@ -193,7 +193,6 @@ class MyPyDotFormatter(object):
                         var_spec_type = 'unused_output'
                     elif var in outputs:
                         var_spec_type = 'output'
-                        print("output", var, self.__node_id(var))
                     else:
                         var_spec_type = 'namedvar'
 
@@ -342,20 +341,15 @@ class MyPyDotFormatter(object):
         int_inputs = [gf.__node_id(x) for x in m['inputs']]
         assert len(ext_inputs) == len(int_inputs)
         h = format_map(zip(ext_inputs, int_inputs))
-        print("h_in", h)
         pd_model.get_attributes()['subg_map_inputs'] = h
 
         # Output mapping
-        print("ext_outputs", ext_outputs)
         hashmap = {hash(v): v_id for v, v_id in ext_outputs}
         _outputs = m['outputs'] if isinstance(m['outputs'], Sequence) else [m['outputs']]
         ext_outputs = [hashmap[hash(o)] for o in _outputs]
-        print("ext_outputs", ext_outputs)
         int_outputs = [gf.__node_id(x) for x in _outputs]
-        print("int_outputs", int_outputs)
         assert len(ext_outputs) == len(int_outputs)
-        h = format_map(zip(ext_outputs, int_outputs))
-        print("h_out", h)
+        h = format_map(zip(int_outputs, ext_outputs))
         pd_model.get_attributes()['subg_map_outputs'] = h
 
 
@@ -535,7 +529,6 @@ def d3viz(th_graph, models, outfile, copy_deps=True, *args, **kwargs):
     # Create DOT graph
     formatter = MyPyDotFormatter(*args, **kwargs)
     graph = formatter(th_graph, models)
-    print("GRAPH", graph.to_string())
     dot_graph = graph.create_dot()
     if not six.PY2:
         dot_graph = dot_graph.decode('utf8')
