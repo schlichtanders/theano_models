@@ -8,6 +8,7 @@ import theano
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
+import base
 from base import Model, models_as_outputs
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
@@ -17,6 +18,9 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 #: global random number generator used by default:
 RNG = RandomStreams()
+
+base.outputting_references.update(['logP'])
+base.inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues'])
 
 """
 Probabilistic Modelling
@@ -289,15 +293,17 @@ class Categorical(Model):
                 Random number generator to draw samples from the distribution from.
             """
             self.probs = probs
-            self._props = T.clip(self.probs, eps, 1 - eps)
+            self._probs = T.clip(self.probs, eps, 1 - eps)
+            self._probs.name = "clipped probs"
 
             @models_as_outputs
             def logP(rv):
-                return T.sum(rv * T.log(self._props))
+                return T.sum(rv * T.log(self._probs))
 
             super(Categorical, self).__init__(
                 inputs=[],
                 outputs=rng.multinomial(pvals=self.probs),
+                parameters_pvalues=[probs],
                 logP=logP
             )
 

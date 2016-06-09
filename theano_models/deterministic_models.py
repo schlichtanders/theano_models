@@ -11,12 +11,23 @@ from itertools import izip
 
 from breze.arch.component import transfer as _transfer
 
-from base import Model, models_as_outputs, merge_key
-from util import softplus, as_tensor_variable
+from collections import Sequence
+
+import base
+from base import Model, models_as_outputs, merge_key, softplus
+from util import as_tensor_variable, clone
 from placeholders import Placeholder
+import wrapt
+import types
+
+from schlichtanders.mylists import deepflatten
+
 
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
+
+base.outputting_references.update(['inverse_outputs', 'norm_det'])
+base.inputting_references.update(['inverse_inputs', 'parameters', 'parameters_positive'])
 
 
 """
@@ -176,10 +187,7 @@ class InvertibleModel(Model):
             # TODO currently only single output is supported
             inverse_inputs = [outputs.type(name="inverse_inputs")]
             inverse_outputs = inverse_outputs(*inverse_inputs)
-
-        inverse_outputs.name = "inverse_outputs"
-        inputs[0].name = "f_inputs"
-        outputs.name = "f_outputs"
+            inverse_outputs.name = "inverse_outputs"
 
         if norm_det is None:
             # assume single input to single output # TODO generalize to multiple outputs?
@@ -196,6 +204,10 @@ class InvertibleModel(Model):
             **further_references
         )
         InvertibleModel.INVERTIBLE_MODELS.append(self)
+        self.is_identity = False
+        # default naming at this place as self.name is definitely set
+        if norm_det.name is None:
+            norm_det.name = self.name + ".norm_det"
 
     @property
     def inv(self):
@@ -206,26 +218,32 @@ class InvertibleModel(Model):
             inverse_outputs=self['outputs'],
             parameters=self['parameters'],
             norm_det=T.inv(self['norm_det']),  # TODO is it really only the inverse?
+            name="inverse_"+self.name
         )
 
     def reduce_identity(self):
-        changed = False
-        # already identity function, ignore this
+        change = False
+        # already identity function
         if self['inputs'] == [self['outputs']]:
-            pass
+            self.is_identity = True
         # f(finv(x)) = x
         elif self['inputs'] == [self['inverse_outputs']]:
             # make identity function:
             self['outputs'] = self['inverse_inputs']
             self['inputs'] = self['inverse_inputs']  # implies self['inverse_outputs] = self['inverse_inputs']
-            changed = True
+            self.is_identity = True
+            change = True
         # finv(f(x)) = x
         elif self['inverse_inputs'] == [self['outputs']]:
             # make identity function:clone,
             self['inverse_outputs'] = self['inputs']
             self['inverse_inputs'] = self['inputs']  # implies self['outputs] = self['inputs']
-            changed = True
-        return changed
+            self.is_identity = True
+            change = True
+        # no identity
+        else:
+            self.is_identity = False
+        return change
 
     @staticmethod
     def reduce_all_identities():

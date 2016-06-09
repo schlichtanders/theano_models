@@ -11,16 +11,18 @@ from itertools import izip
 from copy import copy
 
 from schlichtanders.mydicts import PassThroughDict, DefaultDict
-from schlichtanders.mylists import deepflatten
-from schlichtanders.mynumpy import complex_reshape
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
-from util import norm_distance, L2, clone, clone_all, as_tensor_variable
+import base
+from base import Helper, norm_distance, L2
+from util import clone, clone_all, as_tensor_variable
 from util.theano_helpers import is_clonable, gen_variables, sort_dependent_last, get_dependencies
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+
+base.inputting_references.update(['parameters_flat'])
 
 """
 Postmaps
@@ -136,226 +138,10 @@ def variational_postmap(model):
         loss_regularizer=1/model['n_data'] * model['kl_prior']
     )
 
-
-
 """
-Numerical Postmaps
-------------------
+Numericalize Postmaps
+---------------------
 """
-
-'''
-def __numerical_parameters(model):
-    """ standard remap for accessing shared theano parameters
-
-    if model['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
-    values of all parameters are flattened out and concatinated to give a numerical representation alltogether
-    """
-    num_parameters = []
-    # singleton case:
-    if len(model['parameters']) == 1:
-        # borrow=True is for 1) the case that the optimizer works inplace, 2) its faster
-        return model['parameters'][0].get_value(borrow=True)  # return it directly, without packing it into a list
-    # else, flatten parameters out (as we cannot guarantee matching shapes):
-    else:
-        for p in model['parameters']:
-            v = p.get_value(borrow=True)  # p.get_value(borrow=True) # TODO what does borrow?
-            num_parameters += deepflatten(v)
-    return np.array(num_parameters)  # default to numpy type, as this supports numeric operators like indented
-
-
-def __numericalize(model, loss_reference_name, d_order=0):
-    """ numericalizes ``model[loss_reference_name]`` or the respective derivative of order ``d_order``
-
-    It works analogously to ``numerical_parameters`` in that it handles singleton cases or otherwise reshapes flattened
-    numerical parameters.
-
-    Parameters
-    ----------
-    model : Model
-        source from which to wrap
-    loss_reference_name: str
-        model[reference_name] will be wrapped
-    d_order : int
-        order of derivative (0 stands for no derivative) which shall be computed
-    """
-    # handle singleton parameters:
-    parameters = model['parameters'][0] if len(model['parameters']) == 1 else model['parameters']
-    if d_order == 0:
-        outputs = model[loss_reference_name]
-    elif d_order == 1:
-        outputs = theano.grad(model[loss_reference_name], parameters)
-    elif d_order == 2:
-        try:
-            outputs = theano.gradient.hessian(model[loss_reference_name], parameters)
-        except AssertionError:
-            # TODO hessian breaks if we use constants as parameters (or also matrices), as only vectors are supported
-            # possible workaround: adapt the custom shared definition to make constants of broadcastable (True,)
-            # instead of ()
-            raise TypeError("Cannot (yet) compute hessian for constant parameters.")
-    else:
-        raise ValueError("Derivative of order %s is not yet implemented" % d_order)
-
-    f_theano = theano.function(model['loss_inputs'], outputs)
-    shapes = [p.get_value(borrow=True).shape for p in model['parameters']]  # borrow=True as it is faster
-
-    def f(xs, *args, **kwargs):
-        if len(model['parameters']) == 1:
-            model['parameters'][0].set_value(xs, borrow=True)  # xs is not packed within list
-            return f_theano(*args, **kwargs)  # where initialized correctly
-
-        # else, reshape flattened parameters
-        else:
-            xs = list(complex_reshape(xs, shapes))
-            for x, p in izip(xs, model['parameters']):
-                p.set_value(x, borrow=True)
-
-            if d_order == 0:
-                return f_theano(*args, **kwargs)
-            elif d_order == 1:
-                # CAUTION: must return array type, as this output type should be averagable and else...
-                return np.array(deepflatten(f_theano(*args, **kwargs)))
-            else:
-                raise ValueError("flat reparameterization of order %s is not yet implemented" % d_order)
-                # other orders not yet implemented (will get a bit messy on the hessian,
-                # but there for sure is a general solution to this problem)
-    return f
-'''
-
-'''
-def _numerical_parameters(model, inputs_to_values):
-    """ standard remap for accessing shared theano parameters
-
-    if model['parameters'] refers to singleton, then its numerical value is used directly, otherwise the numerical
-    values of all parameters are flattened out and concatinated to give a numerical representation alltogether
-    """
-    # singleton case:
-    if len(model['parameters']) == 1:
-        # borrow=True is for 1) the case that the optimizer works inplace, 2) its faster
-        return model['parameters'][0].eval(inputs_to_values)  # TODO this builds and hashes a compiled version of the subtree
-
-    # else, flatten parameters out (as we cannot guarantee matching shapes):
-    num_parameters = []
-    for p in model['parameters']:
-        v = p.eval(inputs_to_values)  # TODO this builds and hashes a compiled version of the subtree
-        num_parameters += deepflatten(v)
-    return np.array(num_parameters)  # default to numpy type, as this supports numeric operators like indented
-
-
-def _numericalize(model, loss_reference_name, d_order=0, num_param_shapes=None):
-    """ numericalizes ``model[loss_reference_name]`` or the respective derivative of order ``d_order``
-
-    It works analogously to ``numerical_parameters`` in that it handles singleton cases or otherwise reshapes flattened
-    numerical parameters.
-
-    Parameters
-    ----------
-    model : Model
-        source from which to wrap
-    loss_reference_name: str
-        model[reference_name] will be wrapped
-    d_order : int
-        order of derivative (0 stands for no derivative) which shall be computed
-    """
-    # handle singleton parameters:
-    parameters = model['parameters'][0] if len(model['parameters']) == 1 else model['parameters']
-    if d_order == 0:
-        outputs = model[loss_reference_name]
-    elif d_order == 1:
-        outputs = theano.grad(model[loss_reference_name], parameters)
-    elif d_order == 2:
-        try:
-            outputs = theano.gradient.hessian(model[loss_reference_name], parameters)
-        except AssertionError:
-            # TODO hessian breaks if we use constants as parameters (or also matrices), as only vectors are supported
-            # possible workaround: adapt the custom shared definition to make constants of broadcastable (True,)
-            # instead of ()
-            raise TypeError("Cannot (yet) compute hessian for constant parameters.")
-    else:
-        raise ValueError("Derivative of order %s is not yet implemented" % d_order)
-
-    f_theano = theano.function(model['loss_inputs'] + model['parameters'], outputs)
-
-    def f(xs, *args, **kwargs):
-        if len(model['parameters']) == 1:
-            args += (xs,)  # parameters are initialized like normal inputs
-            return f_theano(*args, **kwargs)  # where initialized correctly
-
-        # else, reshape flattened parameters
-        else:
-            xs = tuple(complex_reshape(xs, num_param_shapes))
-            args += xs
-            if d_order == 0:
-                return f_theano(*args, **kwargs)
-            elif d_order == 1:
-                # CAUTION: must return array type, as this output type should be averagable and else...
-                return np.array(deepflatten(f_theano(*args, **kwargs)))
-            else:
-                raise ValueError("flat reparameterization of order %s is not yet implemented" % d_order)
-                # other orders not yet implemented (will get a bit messy on the hessian,
-                # but there for sure is a general solution to this problem)
-    return f
-
-
-def numericalize_postmap(model, annealing=False, wrapper=None, wrapper_kwargs={},
-                         save_compiled_functions=True, inputs_to_values=None, adapt_init_params=lambda ps:ps):
-    """ postmap to offer an interface for standard numerical optimizer
-
-    'loss' and etc. must be available in the model
-
-    Parameters
-    ----------
-    model : Model
-    annealing : bool
-        indicating whether 'loss_data' and 'loss_regularizer' should be used (annealing=True) or 'loss' (default)
-    wrapper : function f -> f where f function like used in scipy.optimize.minimize
-        wrappers like in schlichtanders.myoptimizers. E.g. batch, online, chunk...
-        or a composition of these
-    wrapper_kwargs : dict
-        extra kwargs for ``wrapper``
-    save_compiled_functions : bool
-        If false, functions are compiled on every postmap call anew. If true, they are hashed like in a usual DefaultDict
-    inputs_to_values : dict
-        for parameters which are not grounded, but depend on the input (only needed for initialization)
-        NON-OPTIONAL!! (because this hidden behaviour might easily lead to weird bugs)
-    adapt_init_params : function numpy-vector -> numpy-vector
-        for further control of initial parameters
-
-    Returns
-    -------
-    DefaultDict over model
-    """
-    if inputs_to_values is None:
-        raise ValueError("Need inputs to values to prevent subtle bugs. If really no inputs are needed, please supply"
-                         "empty dictionary {} as kwarg.")
-    if wrapper is None:
-        if not annealing:
-            def wrapper(f, **wrapper_kwargs):
-                return f
-        else:
-            def wrapper(fs, **wrapper_kwargs):
-                return sum(fs)
-
-    num_parameters = [p.eval(inputs_to_values) for p in model['parameters']]
-    num_shapes = [n.shape for n in num_parameters]
-    num_parameters = num_parameters[0] if len(num_parameters) == 1 else np.array(deepflatten(num_parameters))
-
-    d_order = {"num_loss": 0, "num_jacobian": 1, "num_hessian": 2}
-    def lazy_numericalize(key):
-        if not annealing:
-            return _numericalize(model, "loss", d_order=d_order[key])
-        else:
-            return (
-                _numericalize(model, "loss_data", d_order=d_order[key]),
-                _numericalize(model, "loss_regularizer", d_order=d_order[key])
-            )
-
-    dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
-        lambda key: wrapper(lazy_numericalize(key), **wrapper_kwargs),
-        num_parameters=num_parameters
-    )
-    return dd if save_compiled_functions else dd.noexpand()
-'''
-
 
 def flat_numericalize_postmap(model,
                               annealing=False, wrapper=None, wrapper_kwargs={},
@@ -425,12 +211,19 @@ def flat_numericalize_postmap(model,
             # for now we ignore this
             raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
 
+    def default_getitem(key):
+        if key in derivatives:
+            return wrapper(numericalize(key), **wrapper_kwargs)
+        else:
+            return model[key]
+
     num_parameters = theano.function(model['inputs'], parameters, on_unused_input='ignore')(*initial_inputs)
+
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
-        default_getitem=lambda key: wrapper(numericalize(key), **wrapper_kwargs),
-        default_setitem=lambda key, value: NotImplementedError("You cannot set items on a numericalize postmap."),
+        default_getitem=default_getitem,
+        default_setitem=lambda key, value: NotImplementedError("You cannot set items on a numericalize postmap."),  # if this would be noexpand always, we could do it savely, but without not
         num_parameters=adapt_init_params(num_parameters)
-    )
+    )  # TODO add information about keys in derivatives into DefaultDict
     return dd if save_compiled_functions else dd.noexpand()
 
 
@@ -529,6 +322,8 @@ def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
                     new_p.name = (p.name or str(p)) + "_flat"
                     proxify(p, new_p)
                     i += size
+                # just for booktracking
+                Helper(inputs=[flat], outputs=model[key], name="numerical_deflatten")
 
                 model[key + '_flat'] = flat
 
@@ -558,7 +353,8 @@ def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
                 #         owner_cp.inputs = map(lambda i: var_to_cp.get(i,i), d.owner.inputs)
 
                 flat = T.concatenate([cp.flatten() for cp in copies])
-                flat.name = ":".join(cp.name for cp in copies)
+                flat.name = '"%s"' % ":".join(cp.name for cp in copies)
+                Helper(inputs=[], outputs=flat, name="symbolic_flat")
 
                 i = 0
                 for p, cp in izip(model[key], copies):
@@ -568,6 +364,8 @@ def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
                     new_p.name = (p.name or str(p)) + "_flat"
                     proxify(p, new_p)
                     i += cp.size
+                # might be done using base.complex_reshape, but this should be enough for now for easy booktracking:
+                Helper(inputs=[flat], outputs=model[key], name="symbolic_deflatten")
 
                 model[key + '_flat'] = flat
 

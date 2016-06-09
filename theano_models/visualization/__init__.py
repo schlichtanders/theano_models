@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 from __future__ import absolute_import, print_function, division
+from itertools import izip
 
 from collections import Sequence, defaultdict
 import operator as op
@@ -18,14 +19,20 @@ from theano import gof
 from theano.compile.profilemode import ProfileMode
 from theano.compile import Function
 import pydot as pd
-# import pydotplus as pd
+import subprocess
 
-from theano_models import Model
-from theano_models.util.theano_helpers import is_pseudo_constant
+from ..deterministic_models import InvertibleModel
+from .. import base
+from ..base import Model, Merge
+from ..util.theano_helpers import is_pseudo_constant
+from ..util import deepflatten_keep_vars
 import json
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 __path__ = os.path.dirname(os.path.realpath(__file__))
+
+
+CLUSTER_REFERENCE_GROUPS = False  # does not seem to work with current d3 visualization
 
 
 class MyPyDotFormatter(object):
@@ -55,7 +62,8 @@ class MyPyDotFormatter(object):
                             'shared_input': 'YellowGreen',
                             'output': 'dodgerblue',
                             'unused_output': 'lightgrey',
-                            'namedvar': 'orange'}
+                            'namedvar': 'orange',
+                            'inout': 'red'}
         self.apply_colors = {'GpuFromHost': 'red',
                              'HostFromGpu': 'red',
                              'Scan': 'yellow',
@@ -67,6 +75,7 @@ class MyPyDotFormatter(object):
         self.shapes = {'input': 'box',
                        'output': 'box',
                        'namedvar': 'box',
+                       'inout': 'box',
                        'apply': 'ellipse'}
         self.__node_prefix = 'n'
 
@@ -148,9 +157,8 @@ class MyPyDotFormatter(object):
         elif isinstance(th_graph, tuple) and len(th_graph) == 2:
             inputs, outputs = th_graph
         elif isinstance(th_graph, Model):
-            inputs, outputs = th_graph['inputs'], th_graph['outputs']
-            if not isinstance(outputs, Sequence):
-                outputs = [outputs]
+            # inputs, outputs = th_graph['inputs'], th_graph['outputs']
+            inputs, outputs = model_inputs(th_graph), model_outputs(th_graph)
         else:
             if isinstance(th_graph, gof.Variable):
                 th_graph = [th_graph]
@@ -158,6 +166,9 @@ class MyPyDotFormatter(object):
                 th_graph = th_graph.outputs
             outputs = th_graph
             inputs = gof.graph.inputs(th_graph)
+
+        if not isinstance(outputs, Sequence):
+            outputs = [outputs]
 
         assert isinstance(inputs, (list, tuple))
         assert isinstance(outputs, (list, tuple))
@@ -178,8 +189,9 @@ class MyPyDotFormatter(object):
         for var in topo:
             external_inputs = []
             if isinstance(var, gof.Variable):
-
-                if isinstance(var, gof.Constant):
+                if var in inputs and var in outputs:
+                    var_spec_type = 'inout'
+                elif isinstance(var, gof.Constant):
                     var_spec_type = 'constant_input'
                 elif is_pseudo_constant(var):
                     var_spec_type = 'pseudo_constant_input'
@@ -216,7 +228,9 @@ class MyPyDotFormatter(object):
                 self.make_variable(var, var_spec_type, dot_graph)
 
             elif isinstance(var, Model):
-                external_inputs = var['inputs']
+                # external_inputs = var['inputs']
+                external_inputs = model_inputs(var)
+                # think about extracting contants here, as they don't refer outside
                 # postpone model creation because we need information about external inputs/outputs
                 # self.make_nested_model(var, topo, profile, dot_graph)
             elif isinstance(var, gof.Apply):
@@ -227,7 +241,9 @@ class MyPyDotFormatter(object):
 
             # edges for Model or Node (external_inputs = [] for gof.Variable case)
             for ext_i in external_inputs:
-                if ext_i.owner is None or ext_i.name or ext_i in inputs or is_pseudo_constant(ext_i):  # make extra variable node
+                if isinstance(var, Model) and ext_i not in inputs and (ext_i.owner is None or is_pseudo_constant(ext_i)):
+                    ext_id = None  # skip this external input as it is only confusing
+                elif ext_i.owner is None or ext_i.name or ext_i in inputs or is_pseudo_constant(ext_i):  # make extra variable node
                     if ext_i not in topo:
                         topo.append(ext_i)
 
@@ -254,8 +270,15 @@ class MyPyDotFormatter(object):
         # both in this algorithm as well as in the genereal Model layout.
         for m in sub_models:
             models.remove(m)
+        print()
+        print("####### MODELS ON THIS LEVEL #######")
         for m in sub_models:
-            print("model", m, sub_models)
+            print(m)
+        print("####### MODELS ON LEVELS BELOW #######")
+        for m in models:
+            print(m)
+
+        for m in sub_models:
             self.make_nested_model(m, models=models, profile=profile, dot_graph=dot_graph, **sub_models[m])
 
         return dot_graph
@@ -300,7 +323,7 @@ class MyPyDotFormatter(object):
         pd_var = dict_to_pdnode(vparams)
         dot_graph.add_node(pd_var)
 
-    def make_nested_model(self, m, models, profile, ext_inputs, ext_outputs, dot_graph):
+    def make_nested_model(self, m, models, profile, dot_graph, ext_outputs, ext_inputs=[]):  # [] works, as ext_inputs is not modified
         model_id = self.__node_id(m)
 
         # Model Node on external layer
@@ -314,7 +337,7 @@ class MyPyDotFormatter(object):
         }
         # mparams['apply_op'] = mparams['label']
 
-        use_color = None
+        use_color = "yellow"
         for opName, color in iteritems(self.apply_colors):
             if opName in m.__class__.__name__:
                 use_color = color
@@ -327,31 +350,56 @@ class MyPyDotFormatter(object):
         dot_graph.add_node(pd_model)
 
         # Subgraph
-        subgraph = pd.Cluster(model_id)
+        subgraph = pd.Cluster(model_id, label=model_label(m))
         gf = MyPyDotFormatter()
-        gf.__node_prefix = model_id
+        # don't use "." as this leads to relatively complex escaping situation
+        # don't use "_" as this is ignored by dot command completely
+        gf.__node_prefix = model_id + "n"
         gf(m, models, dot_graph=subgraph)
 
         dot_graph.add_subgraph(subgraph)
         pd_model.get_attributes()['subg'] = subgraph.get_name()
 
+        if CLUSTER_REFERENCE_GROUPS:  # reference groups
+            for k in m:
+                if k != "outputs" and isinstance(m[k], Sequence):
+                    cluster = pd.Cluster(model_id+"_"+k, label=k, color="blue")
+                    for r in m[k]:
+                        cluster.add_node(pd.Node(gf.__node_id(r)))
+                    subgraph.add_subgraph(cluster)
+
+        # Internal/External mappings
         def format_map(m):
             return str([list(x) for x in m])
 
         # Inputs mapping
-        int_inputs = [gf.__node_id(x) for x in m['inputs']]
-        assert len(ext_inputs) == len(int_inputs)
-        h = format_map(zip(ext_inputs, int_inputs))
-        pd_model.get_attributes()['subg_map_inputs'] = h
+        _inputs = model_inputs(m)
+        assert len(ext_inputs) == len(_inputs)
+        # not all internal inputs might be shown externally
+        ext_int_inputs = [(e, gf.__node_id(i)) for e, i in izip(ext_inputs, _inputs) if e is not None]
+
+        # int_inputs = [gf.__node_id(x) for x in _inputs]
+        # assert len(ext_inputs) == len(int_inputs)
+        # h = format_map(zip(ext_inputs, int_inputs))
+        pd_model.get_attributes()['subg_map_inputs'] = format_map(ext_int_inputs)
 
         # Output mapping
         hashmap = {hash(v): v_id for v, v_id in ext_outputs}
-        _outputs = m['outputs'] if isinstance(m['outputs'], Sequence) else [m['outputs']]
-        ext_outputs = [hashmap[hash(o)] for o in _outputs]
-        int_outputs = [gf.__node_id(x) for x in _outputs]
+        _outputs = model_outputs(m)
+        ext_outputs = []
+        int_outputs = []
+        for o in _outputs:
+            try:
+                ext_outputs.append(hashmap[hash(o)])
+                int_outputs.append(gf.__node_id(o))
+            except KeyError:  # if the hash is not found, simply only part of the model is referenced outside
+                pass
+        # ext_outputs = [hashmap[hash(o)] for o in _outputs]
+        # int_outputs = [gf.__node_id(x) for x in _outputs]
         assert len(ext_outputs) == len(int_outputs)
         h = format_map(zip(int_outputs, ext_outputs))
         pd_model.get_attributes()['subg_map_outputs'] = h
+
 
 
 def var_label(var, precision=3):
@@ -388,10 +436,25 @@ def var_tag(var):
         return None
 
 
+def model_inputs(m):
+    ret = []
+    for r in deepflatten_keep_vars(m[k] for k in m if k in base.inputting_references):
+        if r.name is None and (is_pseudo_constant(r)
+                               or isinstance(r, gof.Constant)
+                               or isinstance(r, theano.tensor.sharedvar.TensorSharedVariable)):
+            continue
+        ret.append(r)
+    return ret
+
+
+def model_outputs(m):
+    return deepflatten_keep_vars(m[k] for k in m if k in base.outputting_references)
+
+
 def model_label(m):
     """Return label of apply node."""
-    # return str(node)
-    return m.__class__.__name__
+    # return m.__class__.__name__
+    return m.name
 
 
 def model_profile(m, profile):
@@ -481,18 +544,26 @@ def get_nested_model(ext_o, models):
     """ Note that this returns the first model found which corresponds to the given external output
     you might need to change the order of models to get the desired result """
     for m in models:
-        outputs = m['outputs'] if isinstance(m['outputs'], Sequence) else [m['outputs']]
-        for i, int_o in enumerate(outputs):
-            if ext_o == int_o:
-                return m, i
+        for k in m:
+            # jump over identity models in case of identity is requested:
+            if isinstance(m, InvertibleModel) and m.is_identity and k in ['outputs', 'inputs', 'inverse_outputs', 'inverse_inputs']:
+                # print("JUMPED OVER IDENTITY MODEL")
+                continue
+            if k in base.outputting_references:
+                outputs = m[k] if isinstance(m[k], Sequence) else [m[k]]
+                for i, int_o in enumerate(outputs):
+                    if ext_o == int_o:
+                        return m, i
     return None, None
 
 
 """
 d3 vizualization
+----------------
 """
 
-def d3viz(th_graph, models, outfile, copy_deps=True, *args, **kwargs):
+
+def d3viz(th_graph, outfile, models=None, ignore_models=None, copy_deps=True, *args, **kwargs):
     """Create HTML file with dynamic visualizing of a Theano function graph.
 
     In the HTML file, the whole graph or single nodes can be moved by drag and
@@ -513,10 +584,10 @@ def d3viz(th_graph, models, outfile, copy_deps=True, *args, **kwargs):
     ----------
     th_graph : theano.compile.function_module.Function
         A compiled Theano function, variable, apply or a list of variables.
-    models : list of Model
-        become (possibly nested) subgraphs
     outfile : str
         Path to output HTML file.
+    models : list of Model
+        become (possibly nested) subgraphs
     copy_deps : bool, optional
         Copy javascript and CSS dependencies to output directory.
 
@@ -526,11 +597,26 @@ def d3viz(th_graph, models, outfile, copy_deps=True, *args, **kwargs):
     :class:`theano.d3viz.formatting.PyDotFormatter`.
 
     """
+    if models is None:
+        models = Model.all_models[::-1]  # inverse as latest are probably more complex
+    if ignore_models is not None:
+        for m in ignore_models:
+            models.remove(m)
+    for m in Merge.all_merges:
+        models.remove(m)
 
     # Create DOT graph
     formatter = MyPyDotFormatter(*args, **kwargs)
     graph = formatter(th_graph, models)
+    # with open('tmp.graph', "w") as f:
+    #     f.write(graph.to_string())
+    #     subprocess.call(['dot', '-Gnewrank', '-o', 'tmp.dot', 'tmp.graph'])
+    # with open('tmp.dot', "r") as f:
+    #     dot_graph = f.read()
     dot_graph = graph.create_dot()
+    with open("tmp.dot_graph", "w") as f:
+        f.write(dot_graph)
+    # dot_graph = graph.to_string()
     if not six.PY2:
         dot_graph = dot_graph.decode('utf8')
 
@@ -566,6 +652,8 @@ def d3viz(th_graph, models, outfile, copy_deps=True, *args, **kwargs):
     # Write HTML file
     with open(outfile, 'w') as f:
         f.write(html)
+    # for alternative visualizations
+    return dot_graph
 
 
 def replace_patterns(x, replace):

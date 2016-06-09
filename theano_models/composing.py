@@ -5,9 +5,13 @@ import theano
 from theano import gof
 import theano.tensor as T
 from base import Model, models_as_outputs
+import base
 from collections import Sequence
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+
+base.outputting_references.update(['loglikelihood'])
+base.inputting_references.update(['n_data'])
 
 """
 Composing Deterministic and Probabilistic Models

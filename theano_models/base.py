@@ -21,12 +21,24 @@ from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
-from util import complex_reshape, clone, as_tensor_variable, reparameterize
+from util import clone, as_tensor_variable, deepflatten_keep_vars
 from util.theano_helpers import is_clonable, get_inputs
 import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+
+"""
+Core Components
+===============
+
+list of input/output reference names
+------------------------------------
+As all references will either go into the graph or out, (or only helpers), we summarize them:
+"""
+
+inputting_references = set(['inputs'])
+outputting_references = set(['outputs'])
 
 
 """
@@ -34,16 +46,19 @@ decorator helper
 ----------------
 """
 
+
+def model_to_output(m):
+    if isinstance(m, Sequence) and any(isinstance(n, Model) for n in m):
+        return map(model_to_output, m)
+    elif isinstance(m, Model):
+        return m['outputs']
+    else:
+        return m
+
+
 @wrapt.decorator
 def models_as_outputs(wrapped, instance, args, kwargs):
-    def to_output(m):
-        if isinstance(m, Sequence) and any(isinstance(n, Model) for n in m):
-            return map(to_output, m)
-        elif isinstance(m, Model):
-            return m['outputs']
-        else:
-            return m
-    return wrapped(*map(to_output, args), **fmap(to_output, kwargs))
+    return wrapped(*map(model_to_output, args), **fmap(model_to_output, kwargs))
 
 
 """
@@ -67,9 +82,11 @@ class Model(MutableMapping):
     """
 
     ALLOWED_VALUETYPES = gof.Variable, types.FunctionType
+    current_model = 1
+    all_models = []
 
     @models_as_outputs
-    def __init__(self, outputs, inputs=None, **further_references):
+    def __init__(self, outputs, inputs=None, name=None, **further_references):
         """
         Constructs a Model by directly referencing outputs and inputs, and further_references
         It does essentially nothing, but gives them a summarizing class interface.
@@ -88,7 +105,21 @@ class Model(MutableMapping):
             warnings.warn("Detected singleton input and wrapped it to ``inputs = [input]``.")
             inputs = [inputs]
 
+        if name is None:
+            self.name = "%s%i" % (self.__class__.__name__, self.__class__.current_model)
+            self.__class__.current_model += 1
+        else:
+            self.name = name
+
         _outputs = outputs if isinstance(outputs, Sequence) else [outputs]
+        # set names explicitly
+        for idx, o in enumerate(_outputs):
+            if o.name is None:
+                o.name = "%s.%i" % (self.name, idx)
+        for idx, i in enumerate(inputs):
+            if i.name is None:
+                i.name = "%s.inputs.%i" % (self.name, idx)
+
         if inputs is None:
             inputs = get_inputs(_outputs)
         self.references = {
@@ -96,6 +127,7 @@ class Model(MutableMapping):
             'inputs': inputs,
         }
         self.references.update(further_references)
+        Model.all_models.append(self)
 
     def __copy__(self):
         cls = self.__class__
@@ -147,7 +179,7 @@ class Model(MutableMapping):
             print "fancy reshaping"
             old_cp = [clone(o) for o in
                       old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
-            new = list(complex_reshape(new, old_cp))
+            new = complex_reshape(new, old_cp)  # list(...) not needed because of @track_as_helper decorator
         else:
             singleton = True
             new = [new]
@@ -239,7 +271,7 @@ class Model(MutableMapping):
     # -----------------------
 
     def __str__(self):
-        return pformat(dict(self), indent=2)
+        return self.name + " " + pformat(dict(self), indent=2)
 
     __repr__ = __str__
 
@@ -272,8 +304,45 @@ def reset_eval(var):
 
 """
 Merge helpers
--------------
+=============
 """
+
+
+def reparameterize(parameters, f, finv):
+    """
+    use e.g. within a Merge
+    >>> reparameterize(model['parameters_positive'], softplus, softplusinv)
+    to get new parameters
+
+    new_param = finv(param)
+        param = f(new_param)
+
+    Parameters
+    ----------
+    parameters : list of theano variables
+        to be reparameterized
+    f : function theano_variable -> theano_variable
+    finv : function theano_variable -> theano_variable
+
+    Returns
+    -------
+    new underlying parameters
+    (i.e. NOT the reparameterized parameters, they are substituted, i.e. references still hold)
+    """
+    assert all(is_clonable(param) for param in parameters), (
+        "Can only flatten clonable parameters."
+    )
+    new_underlying_parameters = []
+    for param in parameters:
+        cp_param = clone(param)
+        cp_param.name = (cp_param.name or str(cp_param))  # + "_copy"
+        new_param = model_to_output(finv(cp_param))  # clone is decisive as we otherwise get an infinite reference loop
+        new_param.name = cp_param.name + "_" + f.func_name  # naming is not needed if f, finv are Models
+        proxified_param = model_to_output(f(new_param))
+        proxified_param.name = (param.name or str(param)) + "_reparam"
+        proxify(param, proxified_param)
+        new_underlying_parameters.append(new_param)
+    return new_underlying_parameters
 
 
 def merge_key(models, key="parameters"):
@@ -316,9 +385,10 @@ class Merge(Model):
     or with alternativ ending
     >>> merged = Model(**update(dict(models[0]), merged_))
     which is shorter, but with slight copy overhead.
-
-
     """
+
+    all_merges = []
+
     def __init__(self, *models, **merge_rules):
         """
         inputs, parameters and parameters_positive are merged by default if not overwritten in merge_rules
@@ -355,5 +425,121 @@ class Merge(Model):
 
         update(merged_references, models[0], overwrite=False)
         super(Merge, self).__init__(**merged_references)
+        Merge.all_merges.append(self)
 
+
+
+"""
+Vizualization Helper Model
+==========================
+"""
+
+
+class Helper(Model):
+    all_helpers = []
+
+    def __init__(self, *args, **kwargs):
+        Helper.all_helpers.append(self)
+        super(Helper, self).__init__(*args, **kwargs)
+
+
+@wrapt.decorator
+def track_as_helper(wrapped, instance, args, kwargs):
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+    kwargs['inputs'] = deepflatten_keep_vars(args)
+    Helper(outputs=outputs, name=wrapped.func_name, **kwargs)  # this is just for bookkeeping
+    return outputs
+
+
+"""
+reparameterization helpers
+--------------------------
+"""
+
+eps = as_tensor_variable(0.0001)
+
+@track_as_helper
+def softplus(x, module=T):
+    return module.log(module.exp(x) + 1)
+
+@track_as_helper
+def softplus_inv(y, module=T):
+    return module.log(module.exp(y) - 1)
+
+@track_as_helper
+def squareplus(x, module=T):
+    return module.square(x) + eps  # to ensure >= 0
+
+@track_as_helper
+def squareplus_inv(x, module=T):
+    return module.sqrt(x - eps)
+
+
+"""
+norms and distances
+-------------------
+"""
+
+@track_as_helper
+def L1(parameters):
+    summed_up = 0
+    n = 0
+    for p in parameters:
+        n += p.size
+        summed_up += abs(p).sum()
+    return summed_up / n
+
+@track_as_helper
+def L2(parameters):
+    summed_up = 0
+    n = 0
+    for p in parameters:
+        n += p.size
+        summed_up += (p**2).sum()
+    return summed_up / n
+
+
+def norm_distance(norm=L2):
+    @track_as_helper
+    def distance(targets, outputs):
+        """ targets and outputs are assumed to be *lists* of theano variables """
+        return norm([t - o for t, o in izip(targets, outputs)])
+    return distance
+
+
+"""
+reshape helpers
+---------------
+"""
+
+@track_as_helper
+def total_size(variables):
+    """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
+    if not isinstance(variables, Sequence):
+        variables = [variables]
+    return sum(clone(v).size for v in variables)
+
+@track_as_helper
+def complex_reshape(vector, variables):
+    """ reshapes vector into elements with shapes like variables
+
+    CAUTION: if you want to use this in combination with proxify, first clone the variables. Otherwise recursions occur.
+
+    Parameters
+    ----------
+    vector : list
+        shall be reshaped
+    variables : list of theano variables
+        .size and .shape will be used to reshape vector appropriately
+
+    Returns
+    -------
+        reshaped parts of the vector
+    """
+    i = 0
+    for v in variables:
+        yield vector[i:i+v.size].reshape(v.shape)
+        i += v.size
 
