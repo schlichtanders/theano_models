@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import operator as op
+from collections import Sequence
 from functools import wraps
 import theano
 from theano import gof
@@ -14,15 +15,12 @@ from schlichtanders.mydicts import PassThroughDict, DefaultDict
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
-import base
-from base import Helper, norm_distance, L2
+from subgraphs import norm_distance, L2, Subgraph, inputting_references
 from util import clone, clone_all, as_tensor_variable
 from util.theano_helpers import is_clonable, gen_variables, sort_dependent_last, get_dependencies
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-
-base.inputting_references.update(['parameters_flat'])
 
 """
 Postmaps
@@ -63,7 +61,7 @@ def deterministic_optimizer_postmap(model, distance=norm_distance()):
     IdentityDict over model with standard optimizer keys
     """
     if isinstance(model['outputs'], gof.graph.Variable):
-        targets = [model['outputs'].type()]
+        targets = [model['outputs'].type("deterministic_target")]
         outputs = [model['outputs']]
     else:
         targets = [o.type() for o in model['outputs']]
@@ -89,7 +87,7 @@ def probabilistic_optimizer_postmap(model):
     """
     # virtual random variable
     # (we cannot use model['RV'] itself, as the automatic gradients will get confused because model['RV'] is a complex sampler)
-    RV = model['outputs'].type()  # like targets for deterministic model
+    RV = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
         loss_inputs=[RV] + model['inputs'],
         loss=-model['logP'](RV)
@@ -130,7 +128,7 @@ def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1):
 
 def variational_postmap(model):
     """use this postmap INSTEAD of the standard probabilistic postmap"""
-    RV = model['outputs'].type()  # like targets for deterministic model
+    RV = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
         loss_inputs=[RV] + model['inputs'],
         loss=-model['logP'](RV),
@@ -143,7 +141,8 @@ Numericalize Postmaps
 ---------------------
 """
 
-def flat_numericalize_postmap(model,
+
+def flat_numericalize_postmap(model, flat_key="flat",
                               annealing=False, wrapper=None, wrapper_kwargs={},
                               save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps,
                               profile=False):
@@ -173,7 +172,7 @@ def flat_numericalize_postmap(model,
     -------
     DefaultDict over model
     """
-    assert len(model['parameters']) == 1
+    assert (not isinstance(model[flat_key], Sequence)), "need single flat vector"
     if initial_inputs is None:
         raise ValueError("Need ``initial_inputs`` to prevent subtle bugs. If really no inputs are needed, please supply"
                          "empty list [] as kwarg.")
@@ -185,7 +184,7 @@ def flat_numericalize_postmap(model,
             def wrapper(f, **wrapper_kwargs):
                 return f
 
-    parameters = model['parameters'][0]
+    parameters = model[flat_key]
     derivatives = {
         "num_loss": lambda loss: model[loss],
         "num_jacobian": lambda loss: theano.grad(model[loss], parameters),
@@ -286,93 +285,93 @@ def climin_postmap(model):
     return kwargs
 
 
-"""
-Other Postmaps
---------------
-"""
-
-
-def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
-    if keys_to_flatten is None:
-        raise ValueError("Need ``key_to_flatten``.")
-    if not hasattr(keys_to_flatten, '__iter__'):
-        keys_to_flatten = [keys_to_flatten]
-
-    for key in keys_to_flatten:
-        try:
-            model[key + '_flat']  # another way for testing whether the key is in model or anything passed-through
-        except KeyError:
-            if initial_inputs is not None:
-                flat_sym = T.concatenate([p.flatten() for p in model[key]])
-                shapes_sym = [p.shape for p in model[key]]
-                f = theano.function(model['inputs'], [flat_sym] + shapes_sym, on_unused_input="warn")
-                _f = f(*initial_inputs)
-                flat_num, shapes_num = _f[0], _f[1:]
-                flat = as_tensor_variable(flat_num)
-                # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
-                # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
-                flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in model[key])
-
-                i = 0
-                for p, shape in izip(model[key], shapes_num):
-                    # for size and shapes we need to refer to the copies, as the original parameters get proxified
-                    # (and size/shape refer to the parameters again)
-                    size = np.prod(shape)
-                    new_p = flat[i:i + size].reshape(shape)
-                    new_p.name = (p.name or str(p)) + "_flat"
-                    proxify(p, new_p)
-                    i += size
-                # just for booktracking
-                Helper(inputs=[flat], outputs=model[key], name="numerical_deflatten")
-
-                model[key + '_flat'] = flat
-
-            else:
-                assert all(is_clonable(p) for p in model[key]), "can only flatten clonable parameters"
-                # it is unfortunately not trivial how to flatten parameters
-                # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
-                # while both are parameters finally. If p3 comes before p1, we get that
-                # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
-                # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
-                # to get its position in the flat string
-                # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
-                # well formed theano variables. It is tree-like orderable.
-
-                copies = clone_all(model[key])
-                # variables = sort_dependent_last(model[key])
-                # copies = []
-                # for var in variables:
-                #     # replace all nested dependencies with the respective copies (valid by previous sorting)
-                #     copies.append(clone(var, replace=dict(izip(variables, copies))))
-
-                # var_to_cp = dict(zip(variables, copies))
-                # dependencies = get_dependencies(variables, copies)
-                # for var, deps in dependencies.iteritems():
-                #     for d in deps:  # this is a variable which owner has var as input
-                #         owner_cp = copy(d.owner)
-                #         owner_cp.inputs = map(lambda i: var_to_cp.get(i,i), d.owner.inputs)
-
-                flat = T.concatenate([cp.flatten() for cp in copies])
-                flat.name = '"%s"' % ":".join(cp.name for cp in copies)
-                Helper(inputs=[], outputs=flat, name="symbolic_flat")
-
-                i = 0
-                for p, cp in izip(model[key], copies):
-                    # for size and shapes we need to refer to the copies, as the original parameters get proxified
-                    # (and size/shape refer to the parameters again)
-                    new_p = flat[i:i+cp.size].reshape(cp.shape)
-                    new_p.name = (p.name or str(p)) + "_flat"
-                    proxify(p, new_p)
-                    i += cp.size
-                # might be done using base.complex_reshape, but this should be enough for now for easy booktracking:
-                Helper(inputs=[flat], outputs=model[key], name="symbolic_deflatten")
-
-                model[key + '_flat'] = flat
-
-    return PassThroughDict(model, {
-        key: [model[key + '_flat']] for key in keys_to_flatten  # extra nesting as the original key is supposed to be nested
-    })
-
-
-def flatten_parameters(model, initial_inputs=None):
-    return flatten_keys(model, keys_to_flatten=["parameters"], initial_inputs=initial_inputs)
+# """
+# Other Postmaps
+# --------------
+# """
+#
+#
+# def flatten_keys(model, keys_to_flatten=None, initial_inputs=None):
+#     if keys_to_flatten is None:
+#         raise ValueError("Need ``key_to_flatten``.")
+#     if not hasattr(keys_to_flatten, '__iter__'):
+#         keys_to_flatten = [keys_to_flatten]
+#
+#     for key in keys_to_flatten:
+#         try:
+#             model[key + '_flat']  # another way for testing whether the key is in model or anything passed-through
+#         except KeyError:
+#             if initial_inputs is not None:
+#                 flat_sym = T.concatenate([p.flatten() for p in model[key]])
+#                 shapes_sym = [p.shape for p in model[key]]
+#                 f = theano.function(model['inputs'], [flat_sym] + shapes_sym, on_unused_input="warn")
+#                 _f = f(*initial_inputs)
+#                 flat_num, shapes_num = _f[0], _f[1:]
+#                 flat = as_tensor_variable(flat_num)
+#                 # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
+#                 # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
+#                 flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in model[key])
+#
+#                 i = 0
+#                 for p, shape in izip(model[key], shapes_num):
+#                     # for size and shapes we need to refer to the copies, as the original parameters get proxified
+#                     # (and size/shape refer to the parameters again)
+#                     size = np.prod(shape)
+#                     new_p = flat[i:i + size].reshape(shape)
+#                     new_p.name = (p.name or str(p)) + "_flat"
+#                     proxify(p, new_p)
+#                     i += size
+#                 # just for booktracking
+#                 Subgraph({'inputs': [flat], 'outputs': model[key]}, "numerical_deflatten")
+#
+#                 model[key + '_flat'] = flat
+#
+#             else:
+#                 assert all(is_clonable(p) for p in model[key]), "can only flatten clonable parameters"
+#                 # it is unfortunately not trivial how to flatten parameters
+#                 # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
+#                 # while both are parameters finally. If p3 comes before p1, we get that
+#                 # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
+#                 # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
+#                 # to get its position in the flat string
+#                 # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
+#                 # well formed theano variables. It is tree-like orderable.
+#
+#                 copies = clone_all(model[key])
+#                 # variables = sort_dependent_last(model[key])
+#                 # copies = []
+#                 # for var in variables:
+#                 #     # replace all nested dependencies with the respective copies (valid by previous sorting)
+#                 #     copies.append(clone(var, replace=dict(izip(variables, copies))))
+#
+#                 # var_to_cp = dict(zip(variables, copies))
+#                 # dependencies = get_dependencies(variables, copies)
+#                 # for var, deps in dependencies.iteritems():
+#                 #     for d in deps:  # this is a variable which owner has var as input
+#                 #         owner_cp = copy(d.owner)
+#                 #         owner_cp.inputs = map(lambda i: var_to_cp.get(i,i), d.owner.inputs)
+#
+#                 flat = T.concatenate([cp.flatten() for cp in copies])
+#                 flat.name = '"%s"' % ":".join(cp.name for cp in copies)
+#                 Subgraph({'inputs': [], 'outputs': flat}, "symbolic_flat")
+#
+#                 i = 0
+#                 for p, cp in izip(model[key], copies):
+#                     # for size and shapes we need to refer to the copies, as the original parameters get proxified
+#                     # (and size/shape refer to the parameters again)
+#                     new_p = flat[i:i+cp.size].reshape(cp.shape)
+#                     new_p.name = (p.name or str(p)) + "_flat"
+#                     proxify(p, new_p)
+#                     i += cp.size
+#                 # might be done using base.complex_reshape, but this should be enough for now for easy booktracking:
+#                 Subgraph({'inputs': [flat], 'outputs': model[key]}, "symbolic_deflatten")
+#
+#                 model[key + '_flat'] = flat
+#
+#     return PassThroughDict(model, {
+#         key: [model[key + '_flat']] for key in keys_to_flatten  # extra nesting as the original key is supposed to be nested
+#     })
+#
+#
+# def flatten_parameters(model, initial_inputs=None):
+#     return flatten_keys(model, keys_to_flatten=["parameters"], initial_inputs=initial_inputs)

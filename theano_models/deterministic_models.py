@@ -3,7 +3,10 @@
 from __future__ import division
 
 import numpy as np
+
+import theano
 import theano.tensor as T
+from schlichtanders.myfunctools import fmap
 from theano import gradient, gof
 from theano import config, grad
 from theano.tensor import nlinalg
@@ -13,8 +16,8 @@ from breze.arch.component import transfer as _transfer
 
 from collections import Sequence
 
-import base
-from base import Model, models_as_outputs, merge_key, softplus
+from subgraphs import subgraphs_as_outputs, subgraph_to_output, softplus, inputting_references, outputting_references, Subgraph
+from model import Model, merge_key
 from util import as_tensor_variable, clone
 from placeholders import Placeholder
 import wrapt
@@ -26,8 +29,8 @@ from schlichtanders.mylists import deepflatten
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-base.outputting_references.update(['inverse_outputs', 'norm_det'])
-base.inputting_references.update(['inverse_inputs', 'parameters', 'parameters_positive'])
+outputting_references.update(['inverse_outputs', 'norm_det'])
+inputting_references.update(['inverse_inputs', 'parameters', 'parameters_positive'])
 
 
 """
@@ -91,7 +94,7 @@ MLP
 
 class AffineNonlinear(Model):
 
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, output_size, input=None, transfer='identity'):
         # input needs to be vector
         if input is None:
@@ -119,7 +122,7 @@ class AffineNonlinear(Model):
 
 class Mlp(Model):
 
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
             input = T.dvector()
@@ -156,8 +159,7 @@ class InvertibleModel(Model):
 
     INVERTIBLE_MODELS = []
 
-    @models_as_outputs
-    def __init__(self, inputs, outputs, parameters, inverse_outputs=None, inverse_inputs=None, norm_det=None, **further_references):
+    def __init__(self, inputs, outputs, parameters, inverse=None, norm_det=None, **further_references):
         # TODO support multiple inputs
         """
         Parameters
@@ -168,27 +170,16 @@ class InvertibleModel(Model):
             like usual
         parameters : list of theano expressions
             like usual
-        inverse_outputs : function (or theano expression, but then 'input_inverse' needs to be given)
-            expression which inverses outputs
-        inverse_inputs : single theano variable
-            input of inverse (if inverse is function, this is automatically constructed)
+        inverse : function or Model
+            inverse of this model
         norm_det : theano expression
             used for variable substitution, e.g. within probability distributions
             can be automatically derived, however sometimes a more efficient version is known
             (alternatively you can improve theanos optimizers)
         """
-        if inverse_outputs is None:
-            # make pseudo inverse (will work like a function):
-            inverse_outputs = Placeholder("inverse", itypes=[outputs.type], otypes=[i.type for i in inputs])
-            inverse_outputs.f_inputs = inputs
-            inverse_outputs.f_outputs = outputs
-
-        if hasattr(inverse_outputs, '__call__'):
-            # TODO currently only single output is supported
-            inverse_inputs = [outputs.type(name="inverse_inputs")]
-            inverse_outputs = inverse_outputs(*inverse_inputs)
-            inverse_outputs.name = "inverse_outputs"
-
+        # we cannot use ``subgraphs_as_outputs`` because inverse needs to stay Model
+        inputs = subgraph_to_output(inputs)
+        outputs = subgraph_to_output(outputs)
         if norm_det is None:
             # assume single input to single output # TODO generalize to multiple outputs?
             jac = gradient.jacobian(outputs, inputs[0])
@@ -198,46 +189,59 @@ class InvertibleModel(Model):
             inputs=inputs,
             outputs=outputs,
             parameters=parameters,
-            inverse_outputs=inverse_outputs,
-            inverse_inputs=inverse_inputs,
             norm_det=norm_det,
             **further_references
         )
+
+        if inverse is None:
+            # make pseudo inverse (will work like a function):
+            inverse = Placeholder("inverse", itypes=[outputs.type], otypes=[i.type for i in inputs]) # assumes single output
+            inverse.f_inputs = inputs
+            inverse.f_outputs = outputs
+
+        if hasattr(inverse, '__call__') and not isinstance(inverse, (Subgraph, theano.OpFromGraph)):
+            # TODO currently only single output is supported
+            inverse_inputs = [outputs.type()]
+            inverse_outputs = inverse(*inverse_inputs)
+            inverse = InvertibleModel(
+                inputs=inverse_inputs,
+                outputs=inverse_outputs,
+                inverse=self,
+                norm_det=T.inv(norm_det),
+                parameters=parameters,
+                name="Inverse_" + self.name
+            )
+        self.inverse = inverse
         InvertibleModel.INVERTIBLE_MODELS.append(self)
-        self.is_identity = False
-        # default naming at this place as self.name is definitely set
-        if norm_det.name is None:
-            norm_det.name = self.name + ".norm_det"
+        self._is_identity = False
 
     @property
-    def inv(self):
-        return InvertibleModel(
-            inputs=self['inverse_inputs'],
-            outputs=self['inverse_outputs'],
-            inverse_inputs=self['inputs'],
-            inverse_outputs=self['outputs'],
-            parameters=self['parameters'],
-            norm_det=T.inv(self['norm_det']),  # TODO is it really only the inverse?
-            name="inverse_"+self.name
-        )
+    def is_identity(self):
+        return self._is_identity
+
+    @is_identity.setter
+    def is_identity(self, val):
+        self._is_identity = val
+        self.inverse._is_identity = val
 
     def reduce_identity(self):
         change = False
         # already identity function
-        if self['inputs'] == [self['outputs']]:
+        # assumes singleton input. Note, using `is` gives error as `proxy is not wrapped` but `proxy == wrapped`
+        if self['inputs'][0] == self['outputs']:
             self.is_identity = True
         # f(finv(x)) = x
-        elif self['inputs'] == [self['inverse_outputs']]:
+        elif self['inputs'][0] == self.inverse['outputs']:
             # make identity function:
-            self['outputs'] = self['inverse_inputs']
-            self['inputs'] = self['inverse_inputs']  # implies self['inverse_outputs] = self['inverse_inputs']
+            self['outputs'] = self.inverse['inputs']
+            self['inputs'] = self.inverse['inputs']  # implies self.inverse['outputs] = self.inverse['inputs']
             self.is_identity = True
             change = True
         # finv(f(x)) = x
-        elif self['inverse_inputs'] == [self['outputs']]:
+        elif self.inverse['inputs'][0] == self['outputs']:
             # make identity function:clone,
-            self['inverse_outputs'] = self['inputs']
-            self['inverse_inputs'] = self['inputs']  # implies self['outputs] = self['inputs']
+            self.inverse['outputs'] = self['inputs']
+            self.inverse['inputs'] = self['inputs']  # implies self['outputs] = self['inputs']
             self.is_identity = True
             change = True
         # no identity
@@ -257,7 +261,7 @@ class InvertibleModel(Model):
 class PlanarTransform(InvertibleModel):
     """ invertable transformation, unfortunately without symbolic inverse """
 
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
         if input is None:
             input = T.dvector(name="z")
@@ -292,7 +296,7 @@ class PlanarTransform(InvertibleModel):
 
 class RadialTransform(InvertibleModel):
 
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, input=None, init_alpha=1, init_beta=1, init_z0=None):
         """
 

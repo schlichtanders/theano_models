@@ -2,16 +2,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import theano
+from schlichtanders.myfunctools import convert
+from schlichtanders.mylists import return_list
 from theano import gof
 import theano.tensor as T
-from base import Model, models_as_outputs
-import base
+from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references, \
+    ModifySubgraph
+from model import Model, Merge
 from collections import Sequence
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+from theano.scalar.basic import Abs
 
-base.outputting_references.update(['loglikelihood'])
-base.inputting_references.update(['n_data'])
+outputting_references.update(['loglikelihood', 'kl_prior'])
+inputting_references.update(['n_data'])
 
 """
 Composing Deterministic and Probabilistic Models
@@ -39,14 +43,18 @@ def normalizing_flow(invertible_model, base_prob_model):
         invertible_model(base_base_prob_model) is new probabilistic model, i.e. it transforms the base_prob_model
     """
     invertible_model['inputs'] = base_prob_model
-    @models_as_outputs
-    def normalized_flow(y):
-        inv = invertible_model.inv
-        inv['inputs'] = y
-        return base_prob_model['logP'](inv) - T.log(abs(invertible_model['norm_det'])) # equation (5)
+    merge = Merge(invertible_model, base_prob_model, name="normalized_flow")
 
-    invertible_model['logP'] = normalized_flow
-    return invertible_model
+    @subgraphs_as_outputs
+    @subgraph_modify(merge)
+    def logP(y):
+        invertible_model.inverse['inputs'] = y
+        return base_prob_model['logP'](invertible_model.inverse['outputs']) - T.log(abs(invertible_model['norm_det']))  # equation (5)
+
+    # adapt invertible_model too, as otherwise Y['invertible_modellogP'] would not mirror the sampler invertible_model['outputs']
+    invertible_model['logP'] = logP
+    merge['logP'] = logP
+    return merge
 
 
 """
@@ -114,15 +122,15 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
         kullback leibler divergence KL(X.P||prior). This does not depend any longer on X if I understood it correctly,
         but only on hyperparameters.
     """
+    subgraphs = [Y]
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
 
     # Preprocess args
     # ---------------
-    if not isinstance(Xs, Sequence):
-        Xs = [Xs]
-    if priors is not None and not isinstance(priors, Sequence):
-        priors = [priors]
+    Xs = convert(Xs, list)
+    priors = convert(priors, list)
+    subgraphs += Xs + priors
 
     # if kl is not given we default to the approximation of the Variational Lower Bound found in equation (2) of the
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"
@@ -132,33 +140,43 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
         # as we assume independent sub distribution,
         # the overall log_prior_distr or log_posterior_distr can be computed as a sum of the single log
         # Note, that the variational lower bound requires to substitute RV from X into every distribution function
-        log_prior_distr = 0.0
-        for prior, X in zip(priors, Xs):
-            if isinstance(prior, Model):
-                prior = prior['logP']  # merge must be done outside
-            # else prior is already a logP function
-            log_prior_distr += prior(X)
+        def log_prior_distr():
+            for prior, X in zip(priors, Xs):
+                if isinstance(prior, Model):
+                    prior = prior['logP']  # merge must be done outside
+                # else prior is already a logP function
+                yield prior(X)
 
-        log_posterior_distr = 0.0
-        for X in Xs:
-            log_posterior_distr += X['logP'](X)
+        def log_posterior_distr():
+            for X in Xs:
+                yield X['logP'](X)
 
-        kl_prior = log_posterior_distr - log_prior_distr
+        kl_prior = T.add(*log_posterior_distr()) - T.add(*log_prior_distr())
+        kl_prior.name = "kl_prior"
+    else:
+        subgraphs.append(kl_prior)
 
     # core variational bayes
     # ----------------------
-
     Y['kl_prior'] = kl_prior
 
     Y['loglikelihood'] = Y['logP']
     if "n_data" not in Y:
-        Y['n_data'] = theano.shared(1)  # needs to be updated externally, therefore real theano.shared variable here
+        Y['n_data'] = theano.shared(1, "n_data")  # needs to be updated externally, therefore real theano.shared variable here
 
     Y[randomize_key] = Xs  # make original parameters random
 
-    @models_as_outputs
-    def variational_lower_bound(rv):
-        return Y['loglikelihood'](rv) - 1 / Y['n_data'] * kl_prior
-    Y['logP'] = variational_lower_bound  # functions do not get proxified, so this is not a loop
-    return Y
+    merge = Merge(*(sg for sg in subgraphs if isinstance(sg, Subgraph)), name="variational_lower_bound")
+
+
+    # the variational lower bound as approximation of logP:
+    @subgraphs_as_outputs
+    @subgraph_modify(merge)
+    def logP(rv):
+        return Y['loglikelihood'](rv) - T.inv(Y['n_data']) * kl_prior
+
+    # adapt Y as well, as otherwise Y['logP'] would not mirror the sampler Y['outputs']
+    Y['logP'] = logP
+    merge['logP'] = logP
+    return merge
 

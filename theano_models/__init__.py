@@ -2,14 +2,13 @@
 # -*- coding: utf-8 -*-
 
 # core
-from base import Model, reset_eval, models_as_outputs, model_to_output, Helper, inputting_references, outputting_references
+from model import Model, reset_eval
+from subgraphs import inputting_references, outputting_references
+from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_to_output, subgraph, subgraph_modify
 # Merge
-from base import Merge, merge_key, merge_inputs, merge_key_reparam, pmerge_key_reparam
-# reparameterization
-from base import reparameterize, total_size, softplus, softplus_inv, squareplus, squareplus_inv
-# standard norms and distances
-from base import norm_distance, L1, L2
-
+from model import Merge, Reparameterize, FlatKey, merge_key #, merge_inputs, merge_key_reparam, pmerge_key_reparam
+# helper subgraphs
+from subgraphs import total_size, softplus, softplus_inv, squareplus, squareplus_inv, norm_distance, L1, L2
 
 from placeholders import Placeholder
 

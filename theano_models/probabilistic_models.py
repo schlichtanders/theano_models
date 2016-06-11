@@ -8,8 +8,9 @@ import theano
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 
-import base
-from base import Model, models_as_outputs
+import subgraphs
+from subgraphs import subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
+from model import Model
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
 from util import as_tensor_variable
@@ -19,8 +20,8 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 #: global random number generator used by default:
 RNG = RandomStreams()
 
-base.outputting_references.update(['logP'])
-base.inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues'])
+outputting_references.update(['logP'])
+inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues'])
 
 """
 Probabilistic Modelling
@@ -152,7 +153,7 @@ class DiagGaussianNoise(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, input=None, init_var=None, rng=RNG):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
@@ -171,7 +172,7 @@ class DiagGaussianNoise(Model):
             Random number generator to draw samples from the distribution from.
         """
         if input is None:
-            input = T.dvector(name="input")
+            input = T.dvector()
         if init_var is None:
             init_var = T.ones(input.shape, dtype=config.floatX)
             # TODO ensure that input does not get another shape!!!
@@ -181,20 +182,24 @@ class DiagGaussianNoise(Model):
         noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * noise  # random sampler
 
-        @models_as_outputs
+        super(DiagGaussianNoise, self).__init__(
+            outputs=outputs,
+            inputs=[input],
+            parameters=[],
+            parameters_positive=[self.var]
+        )
+
+        # logP needs to be added after Model creation, as it is kind of an alternative view of the model
+        # to support this view, we need to reference self:
+        @subgraphs_as_outputs
+        @subgraph_modify(self)
         def logP(rv):
             return (
                 (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
                 - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
             )  # everything is elementwise
+        self['logP'] = logP
 
-        super(DiagGaussianNoise, self).__init__(
-            outputs=outputs,
-            logP=logP,
-            inputs=[input],
-            parameters=[],
-            parameters_positive=[self.var]
-        )
 
 
 """
@@ -221,7 +226,7 @@ class DiagGauss(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, output_size=1, init_mean=None, init_var=None, rng=RNG):
         """Initialise a DiagGauss random variable with given mean and variance.
 
@@ -277,7 +282,7 @@ class Categorical(Model):
             the element being 1 and all others being 0. I.e. rows sum up to 1.
 
         """
-        @models_as_outputs
+        @subgraphs_as_outputs
         def __init__(self, probs, rng=RNG, eps=1e-8):
             """Initialize a Categorical object.
 
@@ -296,21 +301,23 @@ class Categorical(Model):
             self._probs = T.clip(self.probs, eps, 1 - eps)
             self._probs.name = "clipped probs"
 
-            @models_as_outputs
-            def logP(rv):
-                return T.sum(rv * T.log(self._probs))
-
             super(Categorical, self).__init__(
                 inputs=[],
                 outputs=rng.multinomial(pvals=self.probs),
                 parameters_pvalues=[probs],
-                logP=logP
             )
+            # logP needs to be added after Model creation, as it is kind of an alternative view of the model
+            # to support this view, we need to reference self:
+            @subgraphs_as_outputs
+            @subgraph_modify(self)
+            def logP(rv):
+                return T.sum(rv * T.log(self._probs))
+            self['logP'] = logP
 
 
 class Uniform(Model):
 
-    @models_as_outputs
+    @subgraphs_as_outputs
     def __init__(self, output_size=1, init_start=None, init_offset=None, rng=RNG):
         """ Initialise a uniform random variable with given range (by start and offset).
 
@@ -356,15 +363,18 @@ class Uniform(Model):
         noise = rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = noise * self.offset + self.start  # random sampler
 
-        @models_as_outputs
-        def logP(rv):
-            # summed over independend components
-            return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
-
         super(Uniform, self).__init__(
             outputs=outputs,
             inputs=[],
-            logP=logP,
             parameters=[self.start],
             parameters_positive=[self.offset]
         )
+
+        # logP needs to be added after Model creation, as it is kind of an alternative view of the model
+        # to support this view, we need to reference self:
+        @subgraphs_as_outputs
+        @subgraph_modify(self)
+        def logP(rv):
+            # summed over independend components
+            return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
+        self['logP'] = logP

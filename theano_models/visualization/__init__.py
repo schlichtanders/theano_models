@@ -22,8 +22,7 @@ import pydot as pd
 import subprocess
 
 from ..deterministic_models import InvertibleModel
-from .. import base
-from ..base import Model, Merge
+from ..subgraphs import Subgraph, inputting_references, outputting_references
 from ..util.theano_helpers import is_pseudo_constant
 from ..util import deepflatten_keep_vars
 import json
@@ -115,7 +114,7 @@ class MyPyDotFormatter(object):
         else:
             return self.__add_node(node)
 
-    def __call__(self, th_graph, models, dot_graph=None):
+    def __call__(self, th_graph, subgraphs, dot_graph=None):
         """Create pydot graph from function.
 
         Parameters
@@ -156,9 +155,9 @@ class MyPyDotFormatter(object):
             inputs = th_graph.inputs
         elif isinstance(th_graph, tuple) and len(th_graph) == 2:
             inputs, outputs = th_graph
-        elif isinstance(th_graph, Model):
+        elif isinstance(th_graph, Subgraph):
             # inputs, outputs = th_graph['inputs'], th_graph['outputs']
-            inputs, outputs = model_inputs(th_graph), model_outputs(th_graph)
+            inputs, outputs = subgraph_inputs(th_graph), subgraph_outputs(th_graph)
         else:
             if isinstance(th_graph, gof.Variable):
                 th_graph = [th_graph]
@@ -184,7 +183,7 @@ class MyPyDotFormatter(object):
         # we handle sub_models independently, as external inputs/outputs need to be mapped to internal ones
         # this is done most straightforwardly by appending this step to the very end, while meanwhile collecting all
         # internal/external relationships respectively
-        sub_models = defaultdict(lambda: defaultdict(list))
+        current_subgraphs = defaultdict(lambda: defaultdict(list))
 
         for var in topo:
             external_inputs = []
@@ -208,7 +207,7 @@ class MyPyDotFormatter(object):
                     else:
                         var_spec_type = 'namedvar'
 
-                    parent, parent_index = get_nested_model(var, models)
+                    parent, parent_index = get_nested_subgraph(var, subgraphs)
                     if not parent:
                         # for sure this is not None as the None case was handled earlier
                         parent, parent_index = var.owner, var.index
@@ -221,15 +220,15 @@ class MyPyDotFormatter(object):
                     pd_edge = pd.Edge(self.__node_id(parent), var_id, label="%i %s"%(parent_index, type_to_str(var.type)))
                     dot_graph.add_edge(pd_edge)
 
-                    if isinstance(parent, Model):
-                        sub_models[parent]['ext_outputs'].append((var, var_id))
+                    if isinstance(parent, Subgraph):
+                        current_subgraphs[parent]['ext_outputs'].append((var, var_id))
 
                 # for all variables do:
                 self.make_variable(var, var_spec_type, dot_graph)
 
-            elif isinstance(var, Model):
+            elif isinstance(var, Subgraph):
                 # external_inputs = var['inputs']
-                external_inputs = model_inputs(var)
+                external_inputs = subgraph_inputs(var)
                 # think about extracting contants here, as they don't refer outside
                 # postpone model creation because we need information about external inputs/outputs
                 # self.make_nested_model(var, topo, profile, dot_graph)
@@ -241,7 +240,7 @@ class MyPyDotFormatter(object):
 
             # edges for Model or Node (external_inputs = [] for gof.Variable case)
             for ext_i in external_inputs:
-                if isinstance(var, Model) and ext_i not in inputs and (ext_i.owner is None or is_pseudo_constant(ext_i)):
+                if isinstance(var, Subgraph) and ext_i not in inputs and (ext_i.owner is None or is_pseudo_constant(ext_i)):
                     ext_id = None  # skip this external input as it is only confusing
                 elif ext_i.owner is None or ext_i.name or ext_i in inputs or is_pseudo_constant(ext_i):  # make extra variable node
                     if ext_i not in topo:
@@ -251,7 +250,7 @@ class MyPyDotFormatter(object):
                     pd_edge = pd.Edge(ext_id, self.__node_id(var), label=type_to_str(ext_i.type))
                     dot_graph.add_edge(pd_edge)
                 else:  # default to next parent
-                    parent, parent_index = get_nested_model(ext_i, models)
+                    parent, parent_index = get_nested_subgraph(ext_i, subgraphs)
                     if not parent:
                         parent, parent_index = ext_i.owner, ext_i.index
                     if parent and parent not in topo:
@@ -262,24 +261,25 @@ class MyPyDotFormatter(object):
                                       label="%i %s" % (parent_index, type_to_str(ext_i.type)))
                     dot_graph.add_edge(pd_edge)
 
-                if isinstance(var, Model):
+                if isinstance(var, Subgraph):
                     # they are already sorted by m['inputs'], hence we don't need the reference to the external input itself
-                    sub_models[var]['ext_inputs'].append(ext_id)
+                    current_subgraphs[var]['ext_inputs'].append(ext_id)
 
         # it is important that models from an upper level are not part of the subgraph, otherwise we get recursion,
         # both in this algorithm as well as in the genereal Model layout.
-        for m in sub_models:
-            models.remove(m)
-        print()
-        print("####### MODELS ON THIS LEVEL #######")
-        for m in sub_models:
-            print(m)
-        print("####### MODELS ON LEVELS BELOW #######")
-        for m in models:
-            print(m)
+        for m in current_subgraphs:
+            subgraphs.remove(m)
+        # print()
+        # print("####### MODELS ON THIS LEVEL #######")
+        # for m in sub_models:
+        #     print(m)
+        # print("####### MODELS ON LEVELS BELOW #######")
+        # for m in models:
+        #     print(m)
 
-        for m in sub_models:
-            self.make_nested_model(m, models=models, profile=profile, dot_graph=dot_graph, **sub_models[m])
+        for m in current_subgraphs:
+            # subgraphs[:], i.e. shallow copy, is essential to prevent side-effects of list.remove
+            self.make_nested_subgraph(m, subgraphs=subgraphs[:], profile=profile, dot_graph=dot_graph, **current_subgraphs[m])
 
         return dot_graph
 
@@ -323,14 +323,14 @@ class MyPyDotFormatter(object):
         pd_var = dict_to_pdnode(vparams)
         dot_graph.add_node(pd_var)
 
-    def make_nested_model(self, m, models, profile, dot_graph, ext_outputs, ext_inputs=[]):  # [] works, as ext_inputs is not modified
-        model_id = self.__node_id(m)
+    def make_nested_subgraph(self, m, subgraphs, profile, dot_graph, ext_outputs, ext_inputs=[]):  # [] works, as ext_inputs is not modified
+        subgraph_id = self.__node_id(m)
 
         # Model Node on external layer
-        mparams = {
-            'name': model_id,
-            'label': model_label(m),
-            'profile': model_profile(m, profile),
+        sgparams = {
+            'name': subgraph_id,
+            'label': subgraph_label(m),
+            'profile': subgraph_profile(m, profile),
             'node_type': 'apply',
             'shape': self.shapes['apply'],
             'apply_op': str(m),
@@ -342,38 +342,38 @@ class MyPyDotFormatter(object):
             if opName in m.__class__.__name__:
                 use_color = color
         if use_color:
-            mparams['style'] = 'filled'
-            mparams['fillcolor'] = use_color
-            mparams['type'] = 'colored'
+            sgparams['style'] = 'filled'
+            sgparams['fillcolor'] = use_color
+            sgparams['type'] = 'colored'
 
-        pd_model = dict_to_pdnode(mparams)
-        dot_graph.add_node(pd_model)
+        node_subgraph = dict_to_pdnode(sgparams)
+        dot_graph.add_node(node_subgraph)
 
         # Subgraph
-        subgraph = pd.Cluster(model_id, label=model_label(m))
+        cluster_subgraph = pd.Cluster(subgraph_id, label=subgraph_label(m))
         gf = MyPyDotFormatter()
         # don't use "." as this leads to relatively complex escaping situation
         # don't use "_" as this is ignored by dot command completely
-        gf.__node_prefix = model_id + "n"
-        gf(m, models, dot_graph=subgraph)
+        gf.__node_prefix = subgraph_id + "n"
+        gf(m, subgraphs, dot_graph=cluster_subgraph)
 
-        dot_graph.add_subgraph(subgraph)
-        pd_model.get_attributes()['subg'] = subgraph.get_name()
+        dot_graph.add_subgraph(cluster_subgraph)
+        node_subgraph.get_attributes()['subg'] = cluster_subgraph.get_name()
 
         if CLUSTER_REFERENCE_GROUPS:  # reference groups
             for k in m:
                 if k != "outputs" and isinstance(m[k], Sequence):
-                    cluster = pd.Cluster(model_id+"_"+k, label=k, color="blue")
+                    cluster = pd.Cluster(subgraph_id+"_"+k, label=k, color="blue")
                     for r in m[k]:
                         cluster.add_node(pd.Node(gf.__node_id(r)))
-                    subgraph.add_subgraph(cluster)
+                    cluster_subgraph.add_subgraph(cluster)
 
         # Internal/External mappings
         def format_map(m):
             return str([list(x) for x in m])
 
         # Inputs mapping
-        _inputs = model_inputs(m)
+        _inputs = subgraph_inputs(m)
         assert len(ext_inputs) == len(_inputs)
         # not all internal inputs might be shown externally
         ext_int_inputs = [(e, gf.__node_id(i)) for e, i in izip(ext_inputs, _inputs) if e is not None]
@@ -381,11 +381,11 @@ class MyPyDotFormatter(object):
         # int_inputs = [gf.__node_id(x) for x in _inputs]
         # assert len(ext_inputs) == len(int_inputs)
         # h = format_map(zip(ext_inputs, int_inputs))
-        pd_model.get_attributes()['subg_map_inputs'] = format_map(ext_int_inputs)
+        node_subgraph.get_attributes()['subg_map_inputs'] = format_map(ext_int_inputs)
 
         # Output mapping
         hashmap = {hash(v): v_id for v, v_id in ext_outputs}
-        _outputs = model_outputs(m)
+        _outputs = subgraph_outputs(m)
         ext_outputs = []
         int_outputs = []
         for o in _outputs:
@@ -398,8 +398,7 @@ class MyPyDotFormatter(object):
         # int_outputs = [gf.__node_id(x) for x in _outputs]
         assert len(ext_outputs) == len(int_outputs)
         h = format_map(zip(int_outputs, ext_outputs))
-        pd_model.get_attributes()['subg_map_outputs'] = h
-
+        node_subgraph.get_attributes()['subg_map_outputs'] = h
 
 
 def var_label(var, precision=3):
@@ -436,9 +435,9 @@ def var_tag(var):
         return None
 
 
-def model_inputs(m):
+def subgraph_inputs(m):
     ret = []
-    for r in deepflatten_keep_vars(m[k] for k in m if k in base.inputting_references):
+    for r in deepflatten_keep_vars(m[k] for k in m if k in inputting_references):
         if r.name is None and (is_pseudo_constant(r)
                                or isinstance(r, gof.Constant)
                                or isinstance(r, theano.tensor.sharedvar.TensorSharedVariable)):
@@ -447,17 +446,17 @@ def model_inputs(m):
     return ret
 
 
-def model_outputs(m):
-    return deepflatten_keep_vars(m[k] for k in m if k in base.outputting_references)
+def subgraph_outputs(m):
+    return deepflatten_keep_vars(m[k] for k in m if k in outputting_references)
 
 
-def model_label(m):
+def subgraph_label(m):
     """Return label of apply node."""
     # return m.__class__.__name__
     return m.name
 
 
-def model_profile(m, profile):
+def subgraph_profile(m, profile):
     if not profile or profile.fct_call_time == 0:
         return None
     call_time = profile.fct_call_time
@@ -468,7 +467,9 @@ def model_profile(m, profile):
 
 def apply_label(node):
     """Return label of apply node."""
-    # return str(node)
+    # this enhances readability a lot (especially as Elemwise nodes have extra color)
+    if node.op.__class__.__name__ == "Elemwise":
+        return node.op.scalar_op.name or node.op.scalar_op.nfunc_spec[0] or "Elemwise"
     return node.op.__class__.__name__
 
 
@@ -540,16 +541,16 @@ def dict_to_pdnode(d):
     return pynode
 
 
-def get_nested_model(ext_o, models):
+def get_nested_subgraph(ext_o, subgraphs):
     """ Note that this returns the first model found which corresponds to the given external output
     you might need to change the order of models to get the desired result """
-    for m in models:
+    for m in subgraphs:
         for k in m:
             # jump over identity models in case of identity is requested:
-            if isinstance(m, InvertibleModel) and m.is_identity and k in ['outputs', 'inputs', 'inverse_outputs', 'inverse_inputs']:
+            if isinstance(m, InvertibleModel) and m.is_identity and k in ['outputs', 'inverse_outputs']:
                 # print("JUMPED OVER IDENTITY MODEL")
                 continue
-            if k in base.outputting_references:
+            if k in outputting_references:
                 outputs = m[k] if isinstance(m[k], Sequence) else [m[k]]
                 for i, int_o in enumerate(outputs):
                     if ext_o == int_o:
@@ -563,7 +564,7 @@ d3 vizualization
 """
 
 
-def d3viz(th_graph, outfile, models=None, ignore_models=None, copy_deps=True, *args, **kwargs):
+def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, copy_deps=True, *args, **kwargs):
     """Create HTML file with dynamic visualizing of a Theano function graph.
 
     In the HTML file, the whole graph or single nodes can be moved by drag and
@@ -586,7 +587,7 @@ def d3viz(th_graph, outfile, models=None, ignore_models=None, copy_deps=True, *a
         A compiled Theano function, variable, apply or a list of variables.
     outfile : str
         Path to output HTML file.
-    models : list of Model
+    subgraphs : list of Subgraphs
         become (possibly nested) subgraphs
     copy_deps : bool, optional
         Copy javascript and CSS dependencies to output directory.
@@ -597,25 +598,23 @@ def d3viz(th_graph, outfile, models=None, ignore_models=None, copy_deps=True, *a
     :class:`theano.d3viz.formatting.PyDotFormatter`.
 
     """
-    if models is None:
-        models = Model.all_models[::-1]  # inverse as latest are probably more complex
-    if ignore_models is not None:
-        for m in ignore_models:
-            models.remove(m)
-    for m in Merge.all_merges:
-        models.remove(m)
+    if subgraphs is None:
+        subgraphs = Subgraph.all_subgraphs[::-1]  # inverse as latest are probably more complex
+    if ignore_subgraphs is not None:
+        for m in ignore_subgraphs:
+            subgraphs.remove(m)
 
     # Create DOT graph
     formatter = MyPyDotFormatter(*args, **kwargs)
-    graph = formatter(th_graph, models)
+    graph = formatter(th_graph, subgraphs)
     # with open('tmp.graph', "w") as f:
     #     f.write(graph.to_string())
     #     subprocess.call(['dot', '-Gnewrank', '-o', 'tmp.dot', 'tmp.graph'])
     # with open('tmp.dot', "r") as f:
     #     dot_graph = f.read()
     dot_graph = graph.create_dot()
-    with open("tmp.dot_graph", "w") as f:
-        f.write(dot_graph)
+    # with open("tmp.dot_graph", "w") as f:
+    #     f.write(dot_graph)
     # dot_graph = graph.to_string()
     if not six.PY2:
         dot_graph = dot_graph.decode('utf8')
