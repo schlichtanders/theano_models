@@ -15,15 +15,19 @@ import six
 import shutil
 
 import theano
+from schlichtanders.mycontextmanagers import ignored
+from schlichtanders.myfunctools import convert
+from schlichtanders.mylists import shallowflatten
 from theano import gof
 from theano.compile.profilemode import ProfileMode
 from theano.compile import Function
 import pydot as pd
 import subprocess
 
+from theano_models.high_level_helpers import fct_to_inputs_outputs
 from ..deterministic_models import InvertibleModel
-from ..subgraphs import Subgraph, inputting_references, outputting_references
-from ..util.theano_helpers import is_pseudo_constant
+from ..subgraphs import Subgraph, inputting_references, outputting_references, subgraph_inputs, subgraph_outputs
+from ..util.theano_helpers import is_pseudo_constant, gen_variables
 from ..util import deepflatten_keep_vars
 import json
 
@@ -114,13 +118,18 @@ class MyPyDotFormatter(object):
         else:
             return self.__add_node(node)
 
-    def __call__(self, th_graph, subgraphs, dot_graph=None):
+    def __call__(self, th_graph, subgraphs, match_by_names=False, dot_graph=None):
         """Create pydot graph from function.
 
         Parameters
         ----------
         th_graph : theano.compile.function_module.Function
             A compiled Theano function, variable, apply or a list of variables.
+        subgraphs: list of Subgraph
+            nested structure (realized in cluster)
+        match_by_names: bool
+            if True, then subgraphs are transformed to match respective nodes in th_graph
+            (correspondence by name)
         dot_graph: pydot.Dot
             `pydot` graph to which nodes are added. Creates new one if
             undefined.
@@ -137,8 +146,8 @@ class MyPyDotFormatter(object):
             dot_graph = pd.Dot()
 
         self.__nodes = {}
-
         profile = None
+
         if isinstance(th_graph, Function):
             mode = th_graph.maker.mode
             if (not isinstance(mode, ProfileMode) or
@@ -148,34 +157,29 @@ class MyPyDotFormatter(object):
                 profile = mode.profile_stats[th_graph]
             else:
                 profile = getattr(th_graph, "profile", None)
-            outputs = th_graph.maker.fgraph.outputs
-            inputs = th_graph.maker.fgraph.inputs
-        elif isinstance(th_graph, gof.FunctionGraph):
-            outputs = th_graph.outputs
-            inputs = th_graph.inputs
-        elif isinstance(th_graph, tuple) and len(th_graph) == 2:
-            inputs, outputs = th_graph
-        elif isinstance(th_graph, Subgraph):
-            # inputs, outputs = th_graph['inputs'], th_graph['outputs']
-            inputs, outputs = subgraph_inputs(th_graph), subgraph_outputs(th_graph)
-        else:
-            if isinstance(th_graph, gof.Variable):
-                th_graph = [th_graph]
-            elif isinstance(th_graph, gof.Apply):
-                th_graph = th_graph.outputs
-            outputs = th_graph
-            inputs = gof.graph.inputs(th_graph)
 
-        if not isinstance(outputs, Sequence):
-            outputs = [outputs]
+        inputs, outputs = fct_to_inputs_outputs(th_graph)
 
-        assert isinstance(inputs, (list, tuple))
-        assert isinstance(outputs, (list, tuple))
-        assert all(isinstance(v, gof.Variable) for v in inputs + outputs)
-        outputs = list(outputs)
-        inputs = list(inputs)
-        topo = list(outputs + inputs)
-
+        if match_by_names:
+            all_variables = set(gen_variables(outputs, yield_on=lambda v: v.name is not None, stop_on=lambda v: v.owner is None))
+            name_to_var = {v.name: v for v in all_variables}
+            # transform all subgraphs respectively
+            def transform_graph(sg):
+                new_sg = {}
+                for key, value in sg.iteritems():
+                    if isinstance(value, Sequence):
+                        h = []
+                        for v in value:
+                            with ignored(KeyError):
+                                h.append(name_to_var[v.name])
+                        new_sg[key] = h
+                    elif isinstance(value, gof.Variable):
+                        with ignored(KeyError):
+                            new_sg[key] = name_to_var[value.name]
+                    # else ignore value
+                return Subgraph(new_sg, name=sg.name, ignore=True, no_unique_name=True)
+            _subgraphs = subgraphs
+            subgraphs = map(transform_graph, subgraphs)
 
         # core parsing
         # ============
@@ -183,6 +187,7 @@ class MyPyDotFormatter(object):
         # we handle sub_models independently, as external inputs/outputs need to be mapped to internal ones
         # this is done most straightforwardly by appending this step to the very end, while meanwhile collecting all
         # internal/external relationships respectively
+        topo = list(outputs + inputs)
         current_subgraphs = defaultdict(lambda: defaultdict(list))
 
         for var in topo:
@@ -434,22 +439,6 @@ def var_tag(var):
     else:
         return None
 
-
-def subgraph_inputs(m):
-    ret = []
-    for r in deepflatten_keep_vars(m[k] for k in m if k in inputting_references):
-        if r.name is None and (is_pseudo_constant(r)
-                               or isinstance(r, gof.Constant)
-                               or isinstance(r, theano.tensor.sharedvar.TensorSharedVariable)):
-            continue
-        ret.append(r)
-    return ret
-
-
-def subgraph_outputs(m):
-    return deepflatten_keep_vars(m[k] for k in m if k in outputting_references)
-
-
 def subgraph_label(m):
     """Return label of apply node."""
     # return m.__class__.__name__
@@ -545,17 +534,20 @@ def get_nested_subgraph(ext_o, subgraphs):
     """ Note that this returns the first model found which corresponds to the given external output
     you might need to change the order of models to get the desired result """
     for m in subgraphs:
-        for k in m:
-            # jump over identity models in case of identity is requested:
-            if isinstance(m, InvertibleModel) and m.is_identity and k in ['outputs', 'inverse_outputs']:
-                # print("JUMPED OVER IDENTITY MODEL")
-                continue
-            if k in outputting_references:
-                outputs = m[k] if isinstance(m[k], Sequence) else [m[k]]
-                for i, int_o in enumerate(outputs):
-                    if ext_o == int_o:
-                        return m, i
+        for out in outputting_references.intersection(m):
+            for idx, int_o in enumerate(convert(m[out], Sequence)):
+                # jump over identity models in case of identity is requested:
+                if ext_o == int_o and not is_identity(int_o, m):
+                    return m, idx
     return None, None
+
+
+def is_identity(o, model):
+    for inp in inputting_references.intersection(model):
+        for i in convert(model[inp], Sequence):
+            if i == o:
+                return True
+    return False
 
 
 """
@@ -564,7 +556,7 @@ d3 vizualization
 """
 
 
-def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, copy_deps=True, *args, **kwargs):
+def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_names=False, copy_deps=True, *args, **kwargs):
     """Create HTML file with dynamic visualizing of a Theano function graph.
 
     In the HTML file, the whole graph or single nodes can be moved by drag and
@@ -589,6 +581,11 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, copy_deps=Tr
         Path to output HTML file.
     subgraphs : list of Subgraphs
         become (possibly nested) subgraphs
+    ignore_subgraphs : list of Subgraph
+        these will be ignored for nesting
+    match_by_names: bool
+        if True, then subgraphs are transformed to match respective nodes in th_graph
+        (correspondence by name)
     copy_deps : bool, optional
         Copy javascript and CSS dependencies to output directory.
 
@@ -600,13 +597,14 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, copy_deps=Tr
     """
     if subgraphs is None:
         subgraphs = Subgraph.all_subgraphs[::-1]  # inverse as latest are probably more complex
+
     if ignore_subgraphs is not None:
         for m in ignore_subgraphs:
             subgraphs.remove(m)
 
     # Create DOT graph
     formatter = MyPyDotFormatter(*args, **kwargs)
-    graph = formatter(th_graph, subgraphs)
+    graph = formatter(th_graph, subgraphs, match_by_names=match_by_names)
     # with open('tmp.graph', "w") as f:
     #     f.write(graph.to_string())
     #     subprocess.call(['dot', '-Gnewrank', '-o', 'tmp.dot', 'tmp.graph'])

@@ -3,21 +3,13 @@
 from __future__ import division
 import operator as op
 from collections import Sequence
-from functools import wraps
 import theano
 from theano import gof
-import theano.tensor as T
-import numpy as np
-from itertools import izip
-from copy import copy
-
 from schlichtanders.mydicts import PassThroughDict, DefaultDict
-from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap
 
-from subgraphs import norm_distance, L2, Subgraph, inputting_references
-from util import clone, clone_all, as_tensor_variable
-from util.theano_helpers import is_clonable, gen_variables, sort_dependent_last, get_dependencies
+from subgraphs import norm_distance, L2
+
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 

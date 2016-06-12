@@ -14,9 +14,11 @@ from schlichtanders.mydicts import update
 from schlichtanders.myfunctools import fmap, convert
 from schlichtanders.mylists import remove_duplicates, shallowflatten
 
-from util import clone, as_tensor_variable, deepflatten_keep_vars, get_unique_name, shallowflatten_keep_vars
-from util.theano_helpers import is_clonable, get_inputs
+from util import clone, as_tensor_variable, deepflatten_keep_vars, U, shallowflatten_keep_vars
+from util.theano_helpers import is_clonable, get_inputs, is_pseudo_constant
 import types
+
+import theano
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -30,6 +32,21 @@ inputting_references = set(['inputs'])
 outputting_references = set(['outputs'])
 
 
+def subgraph_inputs(m):
+    ret = []
+    for r in deepflatten_keep_vars(m[k] for k in m if k in inputting_references):
+        if r.name is None and (is_pseudo_constant(r)
+                               or isinstance(r, theano.gof.Constant)
+                               or isinstance(r, theano.tensor.sharedvar.TensorSharedVariable)):
+            continue
+        ret.append(r)
+    return ret
+
+
+def subgraph_outputs(m):
+    return deepflatten_keep_vars(m[k] for k in m if k in outputting_references)
+
+
 """
 Subgraph class
 --------------
@@ -40,19 +57,18 @@ class Subgraph(MutableMapping):  # == HashableDict with unique name
 
     all_subgraphs = []
 
-    def __init__(self, dict_like=None, name=None, ignore=False, **kwargs):
-        if isinstance(dict_like, Subgraph):
-            self.references = dict_like.references  # to prevent unnecessary nestings
-        elif dict_like is None:
+    def __init__(self, dict_like=None, name=None, ignore=False, no_unique_name=False, **kwargs):
+        if dict_like is None:
             self.references = {}
         else:
             self.references = dict_like
+        # don't use .references if Subgraph, as this would destroy ModifySubgraph behaviour for now
 
         self.references.update(kwargs)
 
         if name is None:
             name = self.__class__.__name__
-        self.name = get_unique_name(name)
+        self.name = name if no_unique_name else U(name)
 
         # set names of references if not done so already
         for k, v in self.iteritems():

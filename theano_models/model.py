@@ -22,7 +22,7 @@ from schlichtanders.mylists import sequencefy, remove_duplicates
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap, convert
 
-from util import clone, as_tensor_variable, deepflatten_keep_vars, get_unique_name
+from util import clone, as_tensor_variable, deepflatten_keep_vars, U
 from util.theano_helpers import is_clonable, get_inputs, clone_all
 import types
 
@@ -32,6 +32,9 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 inputting_references.add("flat")
 
+theano.function
+theano.gof.opt.SeqOptimizer
+theano.gof.opt.MergeOptimizer
 
 """
 Subgraph with substitution == Model

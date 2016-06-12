@@ -18,7 +18,7 @@ from collections import Sequence
 
 from subgraphs import subgraphs_as_outputs, subgraph_to_output, softplus, inputting_references, outputting_references, Subgraph
 from model import Model, merge_key
-from util import as_tensor_variable, clone
+from util import as_tensor_variable, clone, U
 from placeholders import Placeholder
 import wrapt
 import types
@@ -29,8 +29,8 @@ from schlichtanders.mylists import deepflatten
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-outputting_references.update(['inverse_outputs', 'norm_det'])
-inputting_references.update(['inverse_inputs', 'parameters', 'parameters_positive'])
+outputting_references.update(['norm_det'])
+inputting_references.update(['parameters', 'parameters_positive'])
 
 
 """
@@ -108,8 +108,8 @@ class AffineNonlinear(Model):
             self.transfer = transfer
 
         self.weights = T.zeros((input.size, output_size))
-        self.weights.name = "weights"
-        self.bias = as_tensor_variable(np.zeros(output_size), "bias")
+        self.weights.name = U("weights")
+        self.bias = as_tensor_variable(np.zeros(output_size), U("bias"))
 
         output = self.transfer(T.dot(input, self.weights) + self.bias).flatten()  # for some reason I get a matrix here and not a vector
 
@@ -264,20 +264,20 @@ class PlanarTransform(InvertibleModel):
     @subgraphs_as_outputs
     def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
         if input is None:
-            input = T.dvector(name="z")
+            input = T.dvector(name=U("z"))
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
-        self.b = as_tensor_variable(0, "b")
+        self.b = as_tensor_variable(0, U("b"))
         self.w = T.ones(input.shape) if init_w is None else as_tensor_variable(init_w)
-        self.w.name = "w"
+        self.w.name = U("w")
         self._u = T.zeros(input.shape) if init__u is None else as_tensor_variable(init__u)
-        self._u.name = "_u"
+        self._u.name = U("_u")
         # this seems not reversable that easily:
         self.u = self._u + (R_to_Rplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
         # HINT: this softplus might in fact refer to a simple positive parameter, however the formula seems more complex
         # so I leave it with that
-        self.u.name = "u"
+        self.u.name = U("u")
 
         _inner = T.dot(self.w, input) + self.b
         h = h(_inner)  # make it an theano expression
@@ -308,17 +308,17 @@ class RadialTransform(InvertibleModel):
         """
         # TODO raise error for non-valid init_beta or init_alpha!
         if input is None:
-            input = T.dvector(name="z")
+            input = T.dvector(name=U("z"))
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
-        self.alpha = as_tensor_variable(init_alpha, "alpha")
-        self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, "beta+alpha")
+        self.alpha = as_tensor_variable(init_alpha, U("alpha"))
+        self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, U("beta+alpha"))
         self.beta = self.beta_plus_alpha - self.alpha
-        self.beta.name = "beta"
+        self.beta.name = U("beta")
 
         self.z0 = T.zeros(input.shape) if init_z0 is None else as_tensor_variable(init_z0)
-        self.z0.name = "z0"
+        self.z0.name = U("z0")
 
         r = (input - self.z0).norm(2)
         h = 1 / (self.alpha + r)

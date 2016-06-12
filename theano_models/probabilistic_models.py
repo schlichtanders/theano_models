@@ -13,7 +13,7 @@ from subgraphs import subgraphs_as_outputs, subgraph_modify, inputting_reference
 from model import Model
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
-from util import as_tensor_variable
+from util import as_tensor_variable, U
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -177,7 +177,7 @@ class DiagGaussianNoise(Model):
             init_var = T.ones(input.shape, dtype=config.floatX)
             # TODO ensure that input does not get another shape!!!
 
-        self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
+        self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
 
         noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * noise  # random sampler
@@ -262,7 +262,7 @@ class DiagGauss(Model):
 
         # main part
         # ---------
-        self.mean = as_tensor_variable(init_mean, "mean")  # TODO broadcastable?
+        self.mean = as_tensor_variable(init_mean, U("mean"))  # TODO broadcastable?
         dgn = DiagGaussianNoise(self.mean, init_var, rng)
         self.var = dgn.var
 
@@ -299,7 +299,7 @@ class Categorical(Model):
             """
             self.probs = probs
             self._probs = T.clip(self.probs, eps, 1 - eps)
-            self._probs.name = "clipped probs"
+            self._probs.name = U("clipped probs")
 
             super(Categorical, self).__init__(
                 inputs=[],
@@ -357,8 +357,8 @@ class Uniform(Model):
         if (init_offset <= 0).any():
             raise ValueError("offset must be positive")
 
-        self.start = as_tensor_variable(init_start, "start")  # TODO broadcastable?
-        self.offset = as_tensor_variable(init_offset, "offset")  # TODO broadcastable?
+        self.start = as_tensor_variable(init_start, U("start"))  # TODO broadcastable?
+        self.offset = as_tensor_variable(init_offset, U("offset"))  # TODO broadcastable?
 
         noise = rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = noise * self.offset + self.start  # random sampler

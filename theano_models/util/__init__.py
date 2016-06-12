@@ -44,7 +44,6 @@ def deepflatten_keep_vars_(th):
 _start_idx = 1
 _running_numbers = defaultdict(lambda: it.count(_start_idx))
 
-
 def get_unique_name(name, ommit_first_index=True):
     """ appends running number to name to make it unique """
     count = _running_numbers[name]
@@ -52,3 +51,6 @@ def get_unique_name(name, ommit_first_index=True):
     if ommit_first_index and idx == _start_idx:
         return name
     return "%s%i" % (name, idx)
+
+#: convenience shortcut
+U = get_unique_name

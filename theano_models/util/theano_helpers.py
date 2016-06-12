@@ -1,35 +1,33 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-from __future__ import division
+from __future__ import absolute_import, print_function, division
 from six import integer_types
 from collections import Sequence, OrderedDict, defaultdict
 from itertools import izip
+import inspect
+from functools import wraps
+from copy import deepcopy, copy
+from time import time
+import warnings
+
+import numpy
+import numpy as np
 
 import theano
 from theano import config, gof, clone as _clone
 import theano.tensor as T
-from theano.tensor.basic import TensorType, as_tensor_variable
-from theano.tensor.var import TensorConstant
-from theano.gof import utils
-from theano.tensor.sharedvar import TensorSharedVariable, tensor_constructor
-from theano.compile.sharedvalue import SharedVariable
-from theano.gof.graph import Variable
-import numpy
-import numpy as np
-import warnings
 from theano.tensor.basic import as_tensor_variable as _as_tensor_variable
-from functools import wraps
+from theano.tensor.var import TensorConstant
+from theano.tensor.sharedvar import TensorSharedVariable, tensor_constructor
+from theano.gof import utils
+from theano.gof.graph import Variable
 from theano.scan_module.scan_utils import DEPRECATED_ARG
-from copy import deepcopy, copy
-from time import time
+from theano.compile.sharedvalue import SharedVariable
 from theano.compile.builders import OpFromGraph
-import inspect
-from theano.compile.function_module import FunctionMaker
-from theano.compile import SharedVariable, rebuild_collect_shared
+from theano.compile.function_module import FunctionMaker, orig_function
+from theano.compile import SharedVariable, rebuild_collect_shared, Function
+from theano.compile.profilemode import ProfileMode
 
-
-from theano.compile.function_module import orig_function
-from theano.compile import builders
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -201,31 +199,9 @@ OpFromGraph.make_thunk = OpFromGraph_make_thunk
 
 
 """
-theano graph helpers
---------------------
+theano graph traverse helpers
+-----------------------------
 """
-
-
-def clone_all(outputs):
-    to_be_cloned = list(outputs)
-    copies = {}
-    while to_be_cloned:
-        clone_recursive(to_be_cloned.pop(), to_be_cloned, copies, outputs)
-    return [copies[o] for o in outputs]
-
-
-def clone_recursive(o, to_be_cloned, copies, outputs):
-    dependencies = {}
-    for v in gen_variables(o, yield_on=lambda v: v in outputs, stop_on=lambda v: v in outputs):
-        if v in to_be_cloned:
-            to_be_cloned.remove(v)
-            dependencies[v] = clone_recursive(v, to_be_cloned, copies, outputs)
-        else:
-            dependencies[v] = copies[v]
-    o_cp = clone(o, replace=dependencies)
-    o_cp.name = (o.name or str(o)) + "_copy"
-    copies[o] = o_cp
-    return o_cp
 
 
 def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: False):
@@ -270,70 +246,97 @@ def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: Fals
                 yield __v
 
 
-GroundedVariableType = (gof.graph.Constant, SharedVariable)
-def is_clonable(variable):
-    return variable.owner is not None or isinstance(variable, GroundedVariableType)
-
-
-def depends_on(var1, var2):
-    for v in gen_variables(var1, lambda v: True):
-        if v == var2:
-            return True
-    return False
-
-
-def get_dependencies(variables, dependents=None):
-    if dependents is None:
-        dependents = variables
-    if not isinstance(variables, Sequence):
-        variables = [variables]
-    dependencies = defaultdict(list)  # {indepedent: dependent}
-    for var in variables:
-        for v in gen_variables(dependents, lambda v: v.owner is not None and var in v.owner.inputs):
-            dependencies[var].append(v)
-    return dependencies
-
-
-def sort_dependent_last(variables, return_idx=False, return_both=False):
-    """ sorts variables such that later variables depend on earlier (e.g. needed for flattening)
-    >>> a = as_tensor_variable(1)
-    >>> b = as_tensor_variable(2)
-    >>> c = b + 1
-    >>> d = c + b
-    >>> sort_dependent_last([c,a,b,d], return_idx=True)
-    [1, 2, 0, 3]
-
-    Parameters
-    ----------
-    variables : list of variables
-        to be sorted
-    return_idx : bool
-        of True, then a sorting index is returned instead of the sorted variables
-
-    Returns
-    -------
-    sorted idx if return_idx else sorted variables
-    """
-    variables = list(enumerate(variables))
-    sorted_v = []
-    sorted_i = []
-    while variables:
-        i, var = variables.pop(0)
-        if any(depends_on(var, v) for i, v in variables):  # initial var was popped
-            variables.append((i, var))  # put it to the back
-        else:
-            # do not depend on anything else
-            sorted_v.append(var)
-            sorted_i.append(i)
-    if return_idx:
-        return sorted_i
-    elif return_both:
-        return sorted_v, sorted_i
-    else:
-        return sorted_v
+# def depends_on(var1, var2):
+#     for v in gen_variables(var1, lambda v: True):
+#         if v == var2:
+#             return True
+#     return False
+#
+#
+# def get_dependencies(variables, dependents=None):
+#     if dependents is None:
+#         dependents = variables
+#     if not isinstance(variables, Sequence):
+#         variables = [variables]
+#     dependencies = defaultdict(list)  # {indepedent: dependent}
+#     for var in variables:
+#         for v in gen_variables(dependents, lambda v: v.owner is not None and var in v.owner.inputs):
+#             dependencies[var].append(v)
+#     return dependencies
+#
+#
+# def sort_dependent_last(variables, return_idx=False, return_both=False):
+#     """ sorts variables such that later variables depend on earlier (e.g. needed for flattening)
+#     >>> a = as_tensor_variable(1)
+#     >>> b = as_tensor_variable(2)
+#     >>> c = b + 1
+#     >>> d = c + b
+#     >>> sort_dependent_last([c,a,b,d], return_idx=True)
+#     [1, 2, 0, 3]
+#
+#     Parameters
+#     ----------
+#     variables : list of variables
+#         to be sorted
+#     return_idx : bool
+#         of True, then a sorting index is returned instead of the sorted variables
+#
+#     Returns
+#     -------
+#     sorted idx if return_idx else sorted variables
+#     """
+#     variables = list(enumerate(variables))
+#     sorted_v = []
+#     sorted_i = []
+#     while variables:
+#         i, var = variables.pop(0)
+#         if any(depends_on(var, v) for i, v in variables):  # initial var was popped
+#             variables.append((i, var))  # put it to the back
+#         else:
+#             # do not depend on anything else
+#             sorted_v.append(var)
+#             sorted_i.append(i)
+#     if return_idx:
+#         return sorted_i
+#     elif return_both:
+#         return sorted_v, sorted_i
+#     else:
+#         return sorted_v
 
 
 def get_inputs(variables):
     def leaf(v):
         return v.owner is None or is_pseudo_constant(v)
     return list(set(gen_variables(variables, yield_on=leaf, stop_on=leaf)))
+
+
+"""
+theano clone helpers
+--------------------
+"""
+
+GroundedVariableType = (gof.graph.Constant, SharedVariable)
+def is_clonable(variable):
+    return variable.owner is not None or isinstance(variable, GroundedVariableType)
+
+
+def clone_all(outputs):
+    to_be_cloned = list(outputs)
+    copies = {}
+    while to_be_cloned:
+        clone_recursive(to_be_cloned.pop(), to_be_cloned, copies, outputs)
+    return [copies[o] for o in outputs]
+
+
+def clone_recursive(o, to_be_cloned, copies, outputs):
+    dependencies = {}
+    for v in gen_variables(o, yield_on=lambda v: v in outputs, stop_on=lambda v: v in outputs):
+        if v in to_be_cloned:
+            to_be_cloned.remove(v)
+            dependencies[v] = clone_recursive(v, to_be_cloned, copies, outputs)
+        else:
+            dependencies[v] = copies[v]
+    o_cp = clone(o, replace=dependencies)
+    o_cp.name = (o.name or str(o)) + "_copy"
+    copies[o] = o_cp
+    return o_cp
