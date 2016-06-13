@@ -134,7 +134,7 @@ Numericalize Postmaps
 """
 
 
-def flat_numericalize_postmap(model, flat_key="flat",
+def flat_numericalize_postmap(model, flat_key="flat", mode=None,
                               annealing=False, wrapper=None, wrapper_kwargs={},
                               save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps,
                               profile=False):
@@ -186,7 +186,7 @@ def flat_numericalize_postmap(model, flat_key="flat",
     def function(outputs):
         """ compiles function with signature f(params, *loss_inputs) """
         return theano.function([parameters] + model['loss_inputs'], outputs,
-                               on_unused_input="warn", allow_input_downcast=True, profile=profile)
+                               on_unused_input="warn", allow_input_downcast=True, profile=profile, mode=mode)
 
     def numericalize(key):
         try:

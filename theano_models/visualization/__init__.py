@@ -118,7 +118,7 @@ class MyPyDotFormatter(object):
         else:
             return self.__add_node(node)
 
-    def __call__(self, th_graph, subgraphs, match_by_names=False, dot_graph=None):
+    def __call__(self, th_graph, subgraphs, match_by_names=False, dot_graph=None, _profile=None):
         """Create pydot graph from function.
 
         Parameters
@@ -133,6 +133,8 @@ class MyPyDotFormatter(object):
         dot_graph: pydot.Dot
             `pydot` graph to which nodes are added. Creates new one if
             undefined.
+        _profile : ProfileMode
+            for internal recursion only
 
         Returns
         -------
@@ -146,17 +148,16 @@ class MyPyDotFormatter(object):
             dot_graph = pd.Dot()
 
         self.__nodes = {}
-        profile = None
 
-        if isinstance(th_graph, Function):
+        if _profile is None and isinstance(th_graph, Function):
             mode = th_graph.maker.mode
             if (not isinstance(mode, ProfileMode) or
                     th_graph not in mode.profile_stats):
                 mode = None
             if mode:
-                profile = mode.profile_stats[th_graph]
+                _profile = mode.profile_stats[th_graph]
             else:
-                profile = getattr(th_graph, "profile", None)
+                _profile = getattr(th_graph, "profile", None)
 
         inputs, outputs = fct_to_inputs_outputs(th_graph)
 
@@ -238,7 +239,7 @@ class MyPyDotFormatter(object):
                 # postpone model creation because we need information about external inputs/outputs
                 # self.make_nested_model(var, topo, profile, dot_graph)
             elif isinstance(var, gof.Apply):
-                self.make_node(var, profile, dot_graph)
+                self.make_node(var, _profile, dot_graph)
                 external_inputs = var.inputs
             else:
                 raise RuntimeError("var %s instanceof %s should not happen" % (var, var.__class__))
@@ -284,7 +285,7 @@ class MyPyDotFormatter(object):
 
         for m in current_subgraphs:
             # subgraphs[:], i.e. shallow copy, is essential to prevent side-effects of list.remove
-            self.make_nested_subgraph(m, subgraphs=subgraphs[:], profile=profile, dot_graph=dot_graph, **current_subgraphs[m])
+            self.make_nested_subgraph(m, subgraphs=subgraphs[:], _profile=_profile, dot_graph=dot_graph, **current_subgraphs[m])
 
         return dot_graph
 
@@ -328,14 +329,14 @@ class MyPyDotFormatter(object):
         pd_var = dict_to_pdnode(vparams)
         dot_graph.add_node(pd_var)
 
-    def make_nested_subgraph(self, m, subgraphs, profile, dot_graph, ext_outputs, ext_inputs=[]):  # [] works, as ext_inputs is not modified
+    def make_nested_subgraph(self, m, subgraphs, _profile, dot_graph, ext_outputs, ext_inputs=[]):  # [] works, as ext_inputs is not modified
         subgraph_id = self.__node_id(m)
 
         # Model Node on external layer
         sgparams = {
             'name': subgraph_id,
             'label': subgraph_label(m),
-            'profile': subgraph_profile(m, profile),
+            'profile': subgraph_profile(m, _profile),
             'node_type': 'apply',
             'shape': self.shapes['apply'],
             'apply_op': str(m),
@@ -360,7 +361,7 @@ class MyPyDotFormatter(object):
         # don't use "." as this leads to relatively complex escaping situation
         # don't use "_" as this is ignored by dot command completely
         gf.__node_prefix = subgraph_id + "n"
-        gf(m, subgraphs, dot_graph=cluster_subgraph)
+        gf(m, subgraphs, dot_graph=cluster_subgraph, _profile=_profile)
 
         dot_graph.add_subgraph(cluster_subgraph)
         node_subgraph.get_attributes()['subg'] = cluster_subgraph.get_name()
@@ -449,8 +450,10 @@ def subgraph_profile(m, profile):
     if not profile or profile.fct_call_time == 0:
         return None
     call_time = profile.fct_call_time
-    outputs = m['outputs'] if isinstance(m['outputs'], Sequence) else [m['outputs']]
-    time = reduce(op.add, (profile.apply_time.get(node, 0) for node in gof.graph.io_toposort(m['inputs'], outputs)))
+    time = reduce(op.add, (
+        profile.apply_time.get(node, 0)
+        for node in gof.graph.io_toposort(subgraph_inputs(m), subgraph_outputs(m))
+    ))
     return [time, call_time]
 
 
