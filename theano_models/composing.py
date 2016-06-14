@@ -8,7 +8,7 @@ from theano import gof
 import theano.tensor as T
 from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references, \
     ModifySubgraph
-from model import Model, Merge
+from base import Model, Merge
 from collections import Sequence
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -76,7 +76,7 @@ which itself is an approximation (a lower bound) of exactly this Probability dis
 """
 
 
-def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
+def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_priors=False):
     """
     Models Y[randomize_key] as random variable Xs using Bayes. I.e. like Y[randomize_key] = Xs. However, the probability
     function changes, concretely Y['logP'] becomes an integral. Here, this intergral is approximated by the
@@ -121,16 +121,29 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     kl_prior : theano expression or Model (if parameters need to be merged)
         kullback leibler divergence KL(X.P||prior). This does not depend any longer on X if I understood it correctly,
         but only on hyperparameters.
+
+    merge_priors : bool
+        if True, the prior is also merged into the final model
+        this is usually not wanted, as there are reasons that the prior parameters are learned via Hyperparametersearch.
     """
     subgraphs = [Y]
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
+    if 'loglikelihood' in Y:
+        # variational lower bound detected
+        raise RuntimeError("Cannot perform variational lower bound twice on the same Y.")
+        # reason: we don't want/cannot redo the proxifying, hence when executing variational_bayes a second time on the
+        # same randomize_key, the OLD Xs get substituted, which probably aren't part of the second call at all.
+        # this side effect cannot be intended
 
     # Preprocess args
     # ---------------
     Xs = convert(Xs, list)
     priors = convert(priors, list)
-    subgraphs += Xs + priors
+
+    subgraphs += Xs
+    if merge_priors:
+        subgraphs += priors
 
     # if kl is not given we default to the approximation of the Variational Lower Bound found in equation (2) of the
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"

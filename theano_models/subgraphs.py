@@ -276,9 +276,8 @@ reshape helpers
 @subgraph()
 def total_size(variables):
     """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
-    if not isinstance(variables, Sequence):
-        variables = [variables]
-    return sum(clone(v).size for v in variables)
+    variables = convert(variables, Sequence)
+    return T.add(*(clone(v).size for v in variables))
 
 @subgraph()
 def complex_reshape(vector, variables):

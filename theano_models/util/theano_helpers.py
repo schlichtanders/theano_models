@@ -82,6 +82,7 @@ TensorConstant.__str__ = _new_str
 """ theano.clone gives unexpected bugs when using clone like copy in combination with proxify
 
 from theano_models.util import clone
+from schlichtanders.mymeta import proxify
 n = as_tensor_variable(1)
 m = clone(n)
 o = clone(m)  # identical to copy(n) kind of
@@ -92,28 +93,29 @@ print n, n.eval()
 """
 
 
-@wraps(_clone)
-def clone(output,
-          replace=None,
-          strict=True,
-          share_inputs=True,
-          copy_inputs=DEPRECATED_ARG):
-    if replace is None:  # TODO test again, whether this is truly needed!
-        cp = copy(output)
-        if cp.owner is not None:  # CRUCIAL: reference in owner must mirrow self!!
-            # CRUCIAL: original owner must mirrow original self, hence copy also owner
-            cp_owner = copy(cp.owner)  # need new reference to adapt outputs
-            cp_owner.outputs = copy(cp.owner.outputs)  # inputs can stay the same
-            cp.owner.outputs[cp.index] = cp
-        return cp
-    else:
-        return _clone(output,
-          replace=replace,
-          strict=strict,
-          share_inputs=share_inputs,
-          copy_inputs=copy_inputs)
+# @wraps(_clone)
+# def __clone(output,
+#           replace=None,
+#           strict=True,
+#           share_inputs=True,
+#           copy_inputs=DEPRECATED_ARG):
+#     if replace is None:  # TODO test again, whether this is truly needed!
+#         cp = copy(output)
+#         if cp.owner is not None:  # CRUCIAL: reference in owner must mirrow self!!
+#             # CRUCIAL: original owner must mirrow original self, hence copy also owner
+#             cp_owner = copy(cp.owner)  # need new reference to adapt outputs
+#             cp_owner.outputs = copy(cp.owner.outputs)  # inputs can stay the same
+#             cp.owner.outputs[cp.index] = cp
+#         return cp
+#     else:
+#         return _clone(output,
+#           replace=replace,
+#           strict=strict,
+#           share_inputs=share_inputs,
+#           copy_inputs=copy_inputs)
 
-
+# my own implementation seems to have a deep-sitting bug
+clone = _clone
 
 """ monkey patch OpFromGraph to support outer input arguments """
 

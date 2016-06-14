@@ -35,6 +35,8 @@ inputting_references.add("flat")
 theano.function
 theano.gof.opt.SeqOptimizer
 theano.gof.opt.MergeOptimizer
+theano.tensor.log
+theano.gof.fg
 
 """
 Subgraph with substitution == Model
@@ -392,6 +394,8 @@ class FlatKey(Model):
         initial_inputs
         """
         if initial_inputs is not None:
+            if not isinstance(model[key], Sequence):
+                raise ValueError("model[%s] is not Sequence. Nothing to flat." % key)
             flat_sym = T.concatenate([p.flatten() for p in model[key]])
             shapes_sym = [p.shape for p in model[key]]
             f = theano.function(model['inputs'], [flat_sym] + shapes_sym, on_unused_input="warn")
@@ -444,52 +448,6 @@ class FlatKey(Model):
         })
 
 
-# def p_reparameterize(key, f, finv):
-#     """ partial version of reparameterize """
-#     def p(model):
-#         return reparameterize(model[key], f, finv)
-#     return p
-#
-#
-# def reparameterize(parameters, f, finv):
-#     """
-#     use e.g. within a Merge
-#     >>> reparameterize(model['parameters_positive'], softplus, softplusinv)
-#     to get new parameters
-#
-#     new_param = finv(param)
-#         param = f(new_param)
-#
-#     Parameters
-#     ----------
-#     parameters : list of theano variables
-#         to be reparameterized
-#     f : function theano_variable -> theano_variable
-#     finv : function theano_variable -> theano_variable
-#
-#     Returns
-#     -------
-#     new underlying parameters
-#     (i.e. NOT the reparameterized parameters, they are substituted, i.e. references still hold)
-#     """
-#     is_singleton = not isinstance(parameters, Sequence)
-#     parameters = convert(parameters, Sequence)
-#     assert all(is_clonable(param) for param in parameters), (
-#         "Can only flatten clonable parameters."
-#     )
-#     new_underlying_parameters = []
-#     for param in parameters:
-#         cp_param = clone(param)
-#         cp_param.name = (cp_param.name or str(cp_param))  # + "_copy"
-#         new_param = subgraph_to_output(finv(cp_param))  # clone is decisive as we otherwise get an infinite reference loop
-#         new_param.name = cp_param.name + "_" + f.func_name  # naming is not needed if f, finv are Models
-#         proxified_param = subgraph_to_output(f(new_param))
-#         proxified_param.name = (param.name or str(param)) + "_reparam"
-#         proxify(param, proxified_param)
-#         new_underlying_parameters.append(new_param)
-#     return new_underlying_parameters[0] if is_singleton else new_underlying_parameters
-
-
 def merge_key(models, key="parameters"):
     """ simply combines all model[key] values for model in models """
     parameters = []
@@ -497,79 +455,3 @@ def merge_key(models, key="parameters"):
         if key in g:
             parameters += g[key]
     return parameters
-#
-#
-# def merge_key_reparam(models, f, finv, key="parameters", key_reparam="parameters_positive"):
-#     return merge_key(models, key) + reparameterize(merge_key(models, key_reparam), f, finv)
-#
-#
-# def pmerge_key_reparam(f, finv, **outer_kwargs):
-#     def _merge_key_reparam(models, **inner_kwargs):
-#         update(inner_kwargs, outer_kwargs, overwrite=False)
-#         return merge_key_reparam(models, f, finv, **inner_kwargs)
-#     return _merge_key_reparam
-#
-#     return merge_key(models, key) + reparameterize(merge_key(models, key_reparam), f, finv)
-#
-#
-# def merge_inputs(models, key="inputs"):
-#     """ combines all inputs, retaining only such with empty owner """
-#     inputs = []
-#     for g in models:
-#         inputs += g[key]
-#     return [i for i in inputs if i.owner is None]
-#
-# class Merge2(Model):
-#     """ This class is merely for convenience and suggestion.
-#
-#     simple manual version::
-#     >>> merged_ = {k:merge_key(models, k) for k in ('parameters', 'parameters_positive', 'inputs'}
-#     >>> merged = Model(**update(merged_, models[0], overwrite=False)
-#     or with alternativ ending
-#     >>> merged = Model(**update(dict(models[0]), merged_))
-#     which is shorter, but with slight copy overhead.
-#     """
-#
-#     def __init__(self, *models, **merge_rules):
-#         """
-#         inputs, parameters and parameters_positive are merged by default if not overwritten in merge_rules
-#         first model is regarded as Like model
-#
-#         If you don't want this behaviour consider using Model directly to create new models.
-#
-#         Parameters
-#         ----------
-#         model_type : model class
-#             initialized with kwargs
-#         models : list of Model
-#             used for further merging
-#             first model is regarded as base model which additional keys will be used
-#         name : str
-#             name of model (included in merge_rules as of python 2.7)
-#         merge_rules: dictionary of functions working on models
-#             mapping merge_key to merger
-#         """
-#         name = merge_rules.pop('name', None)
-#
-#         update(merge_rules, {
-#                 'parameters': merge_key,
-#                 'parameters_positive': partial(merge_key, key="parameters_positive"),
-#                 'inputs': merge_inputs,
-#             }, overwrite=False)
-#
-#         merged_references = {}
-#         for k, m in merge_rules.iteritems():
-#             if hasattr(m, '__call__'):
-#                 merged_references[k] = m(models)
-#             else:
-#                 merged_references[k] = m
-#
-#         for m in merged_references.itervalues():
-#             if isinstance(m, Sequence):
-#                 remove_duplicates(m)
-#
-#         update(merged_references, models[0], overwrite=False)
-#         super(Merge, self).__init__(name=name, ignore=True, **merged_references)  # Merge should not be listed -> ignore=True
-
-
-

@@ -10,10 +10,11 @@ from theano.tensor.shared_randomstreams import RandomStreams
 
 import subgraphs
 from subgraphs import subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
-from model import Model
+from base import Model, Merge
 from deterministic_models import InvertibleModel
 from schlichtanders.mydicts import update
 from util import as_tensor_variable, U
+from itertools import izip
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -21,7 +22,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 RNG = RandomStreams()
 
 outputting_references.update(['logP'])
-inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues'])
+inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues', 'noise'])
 
 """
 Probabilistic Modelling
@@ -135,7 +136,7 @@ Noise Models
 """
 
 
-class DiagGaussianNoise(Model):
+class GaussianNoise(Model):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -166,25 +167,26 @@ class DiagGaussianNoise(Model):
             number of outputs
         init_mean : np.array
             means, same length as variances
-        init_var : np.array
-            variances, same length as means
+        init_var : scalar
+            variance
         rng : Theano RandomStreams object, optional.
             Random number generator to draw samples from the distribution from.
         """
         if input is None:
             input = T.dvector()
         if init_var is None:
-            init_var = T.ones(input.shape, dtype=config.floatX)
+            init_var = 1.0
             # TODO ensure that input does not get another shape!!!
 
         self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
 
-        noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
-        outputs = input + T.sqrt(self.var) * noise  # random sampler
+        self.noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
-        super(DiagGaussianNoise, self).__init__(
+        super(GaussianNoise, self).__init__(
             outputs=outputs,
             inputs=[input],
+            noise=[self.noise],
             parameters=[],
             parameters_positive=[self.var]
         )
@@ -195,11 +197,92 @@ class DiagGaussianNoise(Model):
         @subgraph_modify(self)
         def logP(rv):
             return (
-                (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
-                - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
+                - (input.size/2) * (T.log(2*np.pi) + T.log(self.var))   # normalizing constant
+                - (1/2 * T.sum((rv - input)**2 / self.var))  # core exponential
             )  # everything is elementwise
+
         self['logP'] = logP
 
+
+class DiagGaussianNoise(Model):
+    """Class representing a Gaussian with diagnonal covariance matrix.
+
+    Attributes
+    ----------
+
+    mean : shared Theano variable wrapping numpy array.
+        The mean of the distribution.
+
+    _Var : shared Theano variable wrapping numpy array
+        parametrization of var (so that var is always positiv)
+
+    var : Theano variable.
+        The variance of the distribution (depends on rho).
+
+    rng : Theano RandomStreams object.
+        Random number generator to draw samples from the distribution from.
+    """
+    @subgraphs_as_outputs
+    def __init__(self, input=None, init_var=None, rng=RNG, use_log2=True):
+        """Add a DiagGauss random noise around given input with given variance (defaults to 1).
+
+        Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
+
+        Parameters
+        ----------
+
+        size : int
+            number of outputs
+        init_mean : np.array
+            means, same length as variances
+        init_var : np.array
+            variances, same length as means
+        rng : Theano RandomStreams object, optional.
+            Random number generator to draw samples from the distribution from.
+        use_log2 : bool
+            indicates whether logarithm shall be computed by log2 instead of log
+            (on some machines improvement of factor 2 or more for big N)
+        """
+        if input is None:
+            input = T.dvector()
+        if init_var is None:
+            init_var = T.ones(input.shape, dtype=config.floatX)
+            # TODO ensure that input does not get another shape!!!
+
+        self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
+
+        self.noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        outputs = input + T.sqrt(self.var) * self.noise  # random sampler
+
+        super(DiagGaussianNoise, self).__init__(
+            outputs=outputs,
+            inputs=[input],
+            noise=[self.noise],
+            parameters=[],
+            parameters_positive=[self.var]
+        )
+
+        # logP needs to be added after Model creation, as it is kind of an alternative view of the model
+        # to support this view, we need to reference self:
+
+        if use_log2:
+            @subgraphs_as_outputs
+            @subgraph_modify(self)
+            def logP(rv):
+                return (
+                    (-input.size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log2(self.var).sum()/T.log2(np.e)  # normalizing constant
+                    - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
+                )  # everything is elementwise
+        else:
+            @subgraphs_as_outputs
+            @subgraph_modify(self)
+            def logP(rv):
+                return (
+                    (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
+                    - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
+                )  # everything is elementwise
+
+        self['logP'] = logP
 
 
 """
@@ -208,7 +291,7 @@ Base Distributions
 """
 
 
-class DiagGauss(Model):
+class Gauss(Model):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -239,6 +322,61 @@ class DiagGauss(Model):
             number of outputs
         init_mean : np.array
             means, same length as variances
+        init_var : scalar > 0
+            variance
+        rng : Theano RandomStreams object, optional.
+            Random number generator to draw samples from the distribution from.
+        """
+        # parameter preprocessing
+        # -----------------------
+        # ensure length is the same:
+        self.output_size = output_size
+        if init_mean is None:
+            init_mean = T.zeros((output_size,), dtype=config.floatX)
+
+        # main part
+        # ---------
+        self.mean = as_tensor_variable(init_mean, U("mean"))  # TODO broadcastable?
+        gn = GaussianNoise(self.mean, init_var, rng=rng)
+        self.var = gn.var
+        self.noise = gn.noise
+
+        kwargs = {'inputs': [], 'parameters': [self.mean]}
+        update(kwargs, gn, overwrite=False)
+        super(Gauss, self).__init__(**kwargs)
+
+
+class DiagGauss(Model):
+    """Class representing a Gaussian with diagnonal covariance matrix.
+
+    Attributes
+    ----------
+
+    mean : shared Theano variable wrapping numpy array.
+        The mean of the distribution.
+
+    _Var : shared Theano variable wrapping numpy array
+        parametrization of var (so that var is always positiv)
+
+    var : Theano variable.
+        The variance of the distribution (depends on rho).
+
+    rng : Theano RandomStreams object.
+        Random number generator to draw samples from the distribution from.
+    """
+    @subgraphs_as_outputs
+    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=RNG, use_log2=True):
+        """Initialise a DiagGauss random variable with given mean and variance.
+
+        Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
+
+        Parameters
+        ----------
+
+        output_size : int
+            number of outputs
+        init_mean : np.array
+            means, same length as variances
         init_var : np.array
             variances, same length as means
         rng : Theano RandomStreams object, optional.
@@ -250,21 +388,18 @@ class DiagGauss(Model):
         if init_mean is not None and init_var is not None and len(init_mean) != len(init_var):
             raise ValueError("means and variances need to be of same length")
 
-        if init_mean is not None:
-            output_size = len(init_mean)
         if init_var is not None:
             output_size = len(init_var)
 
         if init_mean is None:
             init_mean = T.zeros((output_size,), dtype=config.floatX)
-        if init_var is None:
-            init_var = T.ones((output_size,), dtype=config.floatX)
 
         # main part
         # ---------
         self.mean = as_tensor_variable(init_mean, U("mean"))  # TODO broadcastable?
-        dgn = DiagGaussianNoise(self.mean, init_var, rng)
+        dgn = DiagGaussianNoise(self.mean, init_var, rng=rng, use_log2=use_log2)
         self.var = dgn.var
+        self.noise = dgn.noise
 
         kwargs = {'inputs': [], 'parameters': [self.mean]}
         update(kwargs, dgn, overwrite=False)
@@ -366,6 +501,7 @@ class Uniform(Model):
         super(Uniform, self).__init__(
             outputs=outputs,
             inputs=[],
+            noise=[noise],
             parameters=[self.start],
             parameters_positive=[self.offset]
         )
@@ -378,3 +514,45 @@ class Uniform(Model):
             # summed over independend components
             return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
         self['logP'] = logP
+
+
+
+"""
+Combining Probabilistic Models
+------------------------------
+"""
+
+
+class Mixture(Model):
+    def __init__(self, *prob_models, **kwargs):
+        """
+        Parameters
+        ----------
+        prob_models: Model
+            sub probability models to be combined
+        init_mixture_probs: theano vector
+            length should be equal to len(prob_models)
+            should sum up to 1
+        rng: RandomStreams
+        """
+        # TODO assert same length of prob_models and init_mixture_params? theano...
+        # initialize to uniform if not given otherwise
+        self.mixture_probs = kwargs.pop('init_mixture_probs', T.ones((len(prob_models),)) / len(prob_models))
+        self.rng = kwargs.pop('rng', RandomStreams())
+        merge = Merge(*prob_models)
+
+        @subgraphs_as_outputs
+        @subgraph_modify(merge)
+        def logP(rv):
+            # we use a numerical stable version of the log applied to sum of exponentials:
+            logPs = [m['logP'](rv) for m in prob_models]
+            max_logP = T.largest(*logPs)
+            h = (c * T.exp(lP - max_logP) for c, lP in izip(self.mixture_probs, logPs))
+            return max_logP + T.log(T.add(*h))
+
+        outputs = self.rng.choice((1,), a=[m['outputs'] for m in prob_models], p=self.mixture_probs)
+        references = dict(Merge)
+        references['outputs'] = outputs
+        references['logP'] = logP
+        references['parameters'] += [self.mixture_probs]
+        super(Mixture, self).__init__(**references)

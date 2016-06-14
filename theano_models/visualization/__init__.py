@@ -440,6 +440,7 @@ def var_tag(var):
     else:
         return None
 
+
 def subgraph_label(m):
     """Return label of apply node."""
     # return m.__class__.__name__
@@ -608,15 +609,21 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_nam
     # Create DOT graph
     formatter = MyPyDotFormatter(*args, **kwargs)
     graph = formatter(th_graph, subgraphs, match_by_names=match_by_names)
+
+    with open('tmp.graph', "w") as f:
+        f.write(graph.to_string())  # for debugging
+
     # with open('tmp.graph', "w") as f:
     #     f.write(graph.to_string())
     #     subprocess.call(['dot', '-Gnewrank', '-o', 'tmp.dot', 'tmp.graph'])
     # with open('tmp.dot', "r") as f:
     #     dot_graph = f.read()
-    dot_graph = graph.create_dot()
-    # with open("tmp.dot_graph", "w") as f:
-    #     f.write(dot_graph)
+    # # or
     # dot_graph = graph.to_string()
+
+    dot_graph = graph.create_dot()
+    with open("tmp.dot_graph", "w") as f:  # same for debugging purposes
+        f.write(dot_graph)
     if not six.PY2:
         dot_graph = dot_graph.decode('utf8')
 
