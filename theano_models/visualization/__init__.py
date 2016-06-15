@@ -24,7 +24,7 @@ from theano.compile import Function
 import pydot as pd
 import subprocess
 
-from theano_models.high_level_helpers import fct_to_inputs_outputs
+from theano_models.extra_helpers import fct_to_inputs_outputs
 from ..deterministic_models import InvertibleModel
 from ..subgraphs import Subgraph, inputting_references, outputting_references, subgraph_inputs, subgraph_outputs
 from ..util.theano_helpers import is_pseudo_constant, gen_variables

@@ -9,11 +9,11 @@ from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_to_output, subgra
 from base import Merge, Reparameterize, Flatten, merge_key #, merge_inputs, merge_key_reparam, pmerge_key_reparam
 # helper subgraphs
 from subgraphs import total_size, softplus, softplus_inv, squareplus, squareplus_inv, norm_distance, L1, L2
-from high_level_helpers import fct_to_inputs_outputs, get_equiv_by_name
+from extra_helpers import fct_to_inputs_outputs, get_equiv_by_name
 from placeholders import Placeholder
 
 # standard helpers
-from util import as_tensor_variable, clone, is_clonable, clone_all
+from util import as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams
 
 from composing import variational_bayes, normalizing_flow
 

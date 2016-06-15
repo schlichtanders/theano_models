@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function, division
+import sys
 from six import integer_types
 from collections import Sequence, OrderedDict, defaultdict
 from itertools import izip
@@ -27,7 +28,7 @@ from theano.compile.builders import OpFromGraph
 from theano.compile.function_module import FunctionMaker, orig_function
 from theano.compile import SharedVariable, rebuild_collect_shared, Function
 from theano.compile.profilemode import ProfileMode
-
+from theano import tensor
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -288,3 +289,177 @@ def clone_recursive(o, to_be_cloned, copies, outputs):
     o_cp.name = (o.name or str(o)) + "_copy"
     copies[o] = o_cp
     return o_cp
+
+
+
+"""
+Alternative Random Number Generator
+-----------------------------------
+Alternative to ``theano.tensor.shared_randomstreams.RandomStreams``
+"""
+import theano
+from theano.tensor.shared_randomstreams import RandomStreams
+
+
+class PooledRandomStreams(object):
+
+    def __init__(self, pool_size=int(1e8), num_rng=np.random.RandomState(), sym_rng=RandomStreams()):
+        self.pool_size = pool_size
+        self.pools = {}
+        self.num_rng = num_rng
+        self.sym_rng = sym_rng
+
+    def _sample(self, key, shape):
+        if key not in self.pools:
+            self.pools[key] = as_tensor_variable(getattr(self.num_rng, key)(size=self.pool_size))
+
+        size = T.prod(shape)
+        start_i = self.sym_rng.random_integers(size=tuple(), low=0, high=self.pool_size - size - 1)  # -1 as also high is inclusive
+        return T.reshape(self.pools[key][start_i:start_i + size], shape)
+
+    # def binomial(self, size=None, n=1, p=0.5, ndim=None, dtype='int64', prob=None):
+    #     """
+    #     Sample n times with probability of success p for each trial and
+    #     return the number of successes.
+    #
+    #     If the size argument is ambiguous on the number of dimensions,
+    #     ndim may be a plain integer to supplement the missing information.
+    #
+    #     """
+    #     if prob is not None:
+    #         p = prob
+    #         print("DEPRECATION WARNING: the parameter prob to the binomal fct have been renamed"
+    #               "to p to have the same name as numpy.",
+    #               file=sys.stderr)
+    #     raise NotImplemented
+
+
+    def uniform(self, size=None, low=0.0, high=1.0, ndim=None, dtype=None):
+        """
+        Sample a tensor of given size whose element from a uniform
+        distribution between low and high.
+
+        If the size argument is ambiguous on the number of dimensions,
+        ndim may be a plain integer to supplement the missing information.
+        """
+        offset = high - low
+        standard = self._sample('uniform', shape=size)
+        if low != 0.0:
+            standard -= low
+        if offset != 1.0:
+            standard *= high - low
+        return standard
+
+
+    def normal(self, size=None, avg=0.0, std=1.0, ndim=None, dtype=None):
+        """
+        Sample from a normal distribution centered on avg with
+        the specified standard deviation (std).
+
+        If the size argument is ambiguous on the number of dimensions,
+        ndim may be a plain integer to supplement the missing information.
+
+        """
+        standard = self._sample('normal', shape=size)
+        if std != 1.0:
+            standard *= std
+        if avg != 0.0:
+            standard += avg
+        return standard
+
+
+    # def random_integers(self, size=None, low=0, high=1, ndim=None,
+    #                     dtype='int64'):
+    #     """
+    #     Sample a random integer between low and high, both inclusive.
+    #
+    #     If the size argument is ambiguous on the number of dimensions,
+    #     ndim may be a plain integer to supplement the missing information.
+    #
+    #     """
+    #     raise NotImplemented
+    #
+    #
+    # def choice(self, size=None, a=2, replace=True, p=None, ndim=None,
+    #            dtype='int64'):
+    #     """
+    #     Choose values from `a` with or without replacement.
+    #
+    #     `a` can be a 1-D array or a positive scalar.
+    #     If `a` is a scalar, the samples are drawn from the range 0,...,a-1.
+    #
+    #     If the size argument is ambiguous on the number of dimensions,
+    #     ndim may be a plain integer to supplement the missing information.
+    #
+    #     """
+    #     raise NotImplemented
+    #
+    #
+    # def poisson(self, size=None, lam=None, ndim=None, dtype='int64'):
+    #     """
+    #     Draw samples from a Poisson distribution.
+    #
+    #     The Poisson distribution is the limit of the Binomial distribution for
+    #     large N.
+    #
+    #     If the size argument is ambiguous on the number of dimensions,
+    #     ndim may be a plain integer to supplement the missing information.
+    #
+    #     """
+    #     raise NotImplemented
+    #
+    #
+    # def permutation(self, size=None, n=1, ndim=None, dtype='int64'):
+    #     """
+    #     Return permutations of the integers between 0 and n-1.
+    #
+    #     Returns them as many times as required by size. For instance,
+    #     if size=(p,q), p*q permutations will be generated,
+    #     and the output shape will be (p,q,n), because each
+    #     permutation is of size n.
+    #
+    #     Theano tries to infer the number of dimensions from the length
+    #     of the size argument and the shape of n, but you may always
+    #     specify it with the `ndim` parameter.
+    #
+    #     Notes
+    #     -----
+    #     Note that the output will then be of dimension ndim+1.
+    #
+    #     """
+    #     raise NotImplemented
+    #
+    #
+    # def multinomial(self, size=None, n=1, pvals=[0.5, 0.5], ndim=None,
+    #                 dtype='int64'):
+    #     """
+    #     Sample n times from a multinomial distribution defined by
+    #     probabilities pvals, as many times as required by size. For
+    #     instance, if size=(p,q), p*q samples will be drawn, and the
+    #     output shape will be (p,q,len(pvals)).
+    #
+    #     Theano tries to infer the number of dimensions from the length
+    #     of the size argument and the shapes of n and pvals, but you may
+    #     always specify it with the `ndim` parameter.
+    #
+    #     Notes
+    #     -----
+    #     Note that the output will then be of dimension ndim+1.
+    #
+    #     """
+    #     raise NotImplemented
+    #
+    #
+    # def shuffle_row_elements(self, input):
+    #     """
+    #     Return a variable with every row (rightmost index) shuffled.
+    #
+    #     This uses permutation random variable internally, available via
+    #     the ``.permutation`` attribute of the return value.
+    #
+    #     """
+    #     perm = self.permutation(size=input.shape[:-1], n=input.shape[-1],
+    #                             ndim=input.ndim - 1)
+    #     shuffled = tensor.permute_row_elements(input, perm)
+    #     shuffled.permutation = perm
+    #     return shuffled

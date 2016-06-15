@@ -155,7 +155,7 @@ class GaussianNoise(Model):
         Random number generator to draw samples from the distribution from.
     """
     @subgraphs_as_outputs
-    def __init__(self, input=None, init_var=None, rng=RNG):
+    def __init__(self, input=None, init_var=None, rng=None):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -172,6 +172,8 @@ class GaussianNoise(Model):
         rng : Theano RandomStreams object, optional.
             Random number generator to draw samples from the distribution from.
         """
+        print(RNG)
+        self.rng = rng or RNG
         if input is None:
             input = T.dvector()
         if init_var is None:
@@ -180,7 +182,7 @@ class GaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
 
-        self.noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(GaussianNoise, self).__init__(
@@ -223,7 +225,7 @@ class DiagGaussianNoise(Model):
         Random number generator to draw samples from the distribution from.
     """
     @subgraphs_as_outputs
-    def __init__(self, input=None, init_var=None, rng=RNG, use_log2=True):
+    def __init__(self, input=None, init_var=None, rng=None, use_log2=True):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -243,6 +245,8 @@ class DiagGaussianNoise(Model):
             indicates whether logarithm shall be computed by log2 instead of log
             (on some machines improvement of factor 2 or more for big N)
         """
+        print(RNG)
+        self.rng = rng or RNG
         if input is None:
             input = T.dvector()
         if init_var is None:
@@ -251,7 +255,7 @@ class DiagGaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
 
-        self.noise = rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(DiagGaussianNoise, self).__init__(
@@ -310,7 +314,7 @@ class Gauss(Model):
         Random number generator to draw samples from the distribution from.
     """
     @subgraphs_as_outputs
-    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=RNG):
+    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None):
         """Initialise a DiagGauss random variable with given mean and variance.
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -340,6 +344,7 @@ class Gauss(Model):
         gn = GaussianNoise(self.mean, init_var, rng=rng)
         self.var = gn.var
         self.noise = gn.noise
+        self.rng = gn.rng
 
         kwargs = {'inputs': [], 'parameters': [self.mean]}
         update(kwargs, gn, overwrite=False)
@@ -365,7 +370,7 @@ class DiagGauss(Model):
         Random number generator to draw samples from the distribution from.
     """
     @subgraphs_as_outputs
-    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=RNG, use_log2=True):
+    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None, use_log2=True):
         """Initialise a DiagGauss random variable with given mean and variance.
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -400,6 +405,7 @@ class DiagGauss(Model):
         dgn = DiagGaussianNoise(self.mean, init_var, rng=rng, use_log2=use_log2)
         self.var = dgn.var
         self.noise = dgn.noise
+        self.rng = dgn.rng
 
         kwargs = {'inputs': [], 'parameters': [self.mean]}
         update(kwargs, dgn, overwrite=False)
@@ -418,7 +424,7 @@ class Categorical(Model):
 
         """
         @subgraphs_as_outputs
-        def __init__(self, probs, rng=RNG, eps=1e-8):
+        def __init__(self, probs, rng=None, eps=1e-8):
             """Initialize a Categorical object.
 
             Parameters
@@ -432,13 +438,14 @@ class Categorical(Model):
             rng : Theano RandomStreams object, optional.
                 Random number generator to draw samples from the distribution from.
             """
+            self.rng = rng or RNG
             self.probs = probs
             self._probs = T.clip(self.probs, eps, 1 - eps)
             self._probs.name = U("clipped probs")
 
             super(Categorical, self).__init__(
                 inputs=[],
-                outputs=rng.multinomial(pvals=self.probs),
+                outputs=self.rng.multinomial(pvals=self.probs),
                 parameters_pvalues=[probs],
             )
             # logP needs to be added after Model creation, as it is kind of an alternative view of the model
@@ -453,7 +460,7 @@ class Categorical(Model):
 class Uniform(Model):
 
     @subgraphs_as_outputs
-    def __init__(self, output_size=1, init_start=None, init_offset=None, rng=RNG):
+    def __init__(self, output_size=1, init_start=None, init_offset=None, rng=None):
         """ Initialise a uniform random variable with given range (by start and offset).
 
         Start default to 0, and offset to 1, if not further specified, i.e. standard uniform random variable.
@@ -472,6 +479,7 @@ class Uniform(Model):
         rng : Theano RandomStreams object, optional.
             Random number generator to draw samples from the distribution from.
         """
+        self.rng = rng or RNG
         # ensure length is the same:
         if init_start is not None and init_offset is not None and len(init_start) != len(init_offset):
             raise ValueError("starts and offsets need to be of same length")
@@ -495,7 +503,7 @@ class Uniform(Model):
         self.start = as_tensor_variable(init_start, U("start"))  # TODO broadcastable?
         self.offset = as_tensor_variable(init_offset, U("offset"))  # TODO broadcastable?
 
-        noise = rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = noise * self.offset + self.start  # random sampler
 
         super(Uniform, self).__init__(
@@ -538,7 +546,7 @@ class Mixture(Model):
         # TODO assert same length of prob_models and init_mixture_params? theano...
         # initialize to uniform if not given otherwise
         self.mixture_probs = kwargs.pop('init_mixture_probs', T.ones((len(prob_models),)) / len(prob_models))
-        self.rng = kwargs.pop('rng', RandomStreams())
+        self.rng = kwargs.pop('rng', RNG)
         merge = Merge(*prob_models)
 
         @subgraphs_as_outputs
