@@ -6,8 +6,7 @@ from schlichtanders.myfunctools import convert
 from schlichtanders.mylists import return_list
 from theano import gof
 import theano.tensor as T
-from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references, \
-    ModifySubgraph
+from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
 from base import Model, Merge
 from collections import Sequence
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -76,7 +75,7 @@ which itself is an approximation (a lower bound) of exactly this Probability dis
 """
 
 
-def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_priors=False):
+def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_priors=True):
     """
     Models Y[randomize_key] as random variable Xs using Bayes. I.e. like Y[randomize_key] = Xs. However, the probability
     function changes, concretely Y['logP'] becomes an integral. Here, this intergral is approximated by the

@@ -210,10 +210,8 @@ def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: Fals
     if not isinstance(initial_variables, Sequence):
         initial_variables = [initial_variables]
     for v in initial_variables:
-        if v.owner is not None:
-            for _v in v.owner.inputs:
-                for n in _gen_nodes(_v, yield_on=yield_on, stop_on=stop_on):  # yield from
-                    yield n
+        for _v in _gen_nodes(v, yield_on=yield_on, stop_on=stop_on):  # yield from
+            yield _v
 
 
 def _gen_nodes(v, yield_on=lambda n: True, stop_on=lambda v: False):
@@ -227,15 +225,21 @@ def _gen_nodes(v, yield_on=lambda n: True, stop_on=lambda v: False):
                 yield n
 
 
-def gen_variables(initial_variables, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
+def gen_variables(initial_variables, yield_on=lambda v: v.owner is None, stop_on=lambda v: False, include_initials=True):
     """ first level is not tested """
     if not isinstance(initial_variables, Sequence):
         initial_variables = [initial_variables]
-    for v in initial_variables:
-        if v.owner is not None:
-            for _v in v.owner.inputs:
-                for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
-                    yield __v
+    if include_initials:
+        for v in initial_variables:
+            for _v in _gen_variables(v, yield_on=yield_on, stop_on=stop_on):  # yield from
+                yield _v
+    else:
+        for v in initial_variables:
+            if v.owner is not None:
+                for _v in v.owner.inputs:
+                    for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
+                        yield __v
+
 
 def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
     if yield_on(v):
@@ -246,64 +250,6 @@ def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: Fals
         for _v in v.owner.inputs:
             for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
                 yield __v
-
-
-# def depends_on(var1, var2):
-#     for v in gen_variables(var1, lambda v: True):
-#         if v == var2:
-#             return True
-#     return False
-#
-#
-# def get_dependencies(variables, dependents=None):
-#     if dependents is None:
-#         dependents = variables
-#     if not isinstance(variables, Sequence):
-#         variables = [variables]
-#     dependencies = defaultdict(list)  # {indepedent: dependent}
-#     for var in variables:
-#         for v in gen_variables(dependents, lambda v: v.owner is not None and var in v.owner.inputs):
-#             dependencies[var].append(v)
-#     return dependencies
-#
-#
-# def sort_dependent_last(variables, return_idx=False, return_both=False):
-#     """ sorts variables such that later variables depend on earlier (e.g. needed for flattening)
-#     >>> a = as_tensor_variable(1)
-#     >>> b = as_tensor_variable(2)
-#     >>> c = b + 1
-#     >>> d = c + b
-#     >>> sort_dependent_last([c,a,b,d], return_idx=True)
-#     [1, 2, 0, 3]
-#
-#     Parameters
-#     ----------
-#     variables : list of variables
-#         to be sorted
-#     return_idx : bool
-#         of True, then a sorting index is returned instead of the sorted variables
-#
-#     Returns
-#     -------
-#     sorted idx if return_idx else sorted variables
-#     """
-#     variables = list(enumerate(variables))
-#     sorted_v = []
-#     sorted_i = []
-#     while variables:
-#         i, var = variables.pop(0)
-#         if any(depends_on(var, v) for i, v in variables):  # initial var was popped
-#             variables.append((i, var))  # put it to the back
-#         else:
-#             # do not depend on anything else
-#             sorted_v.append(var)
-#             sorted_i.append(i)
-#     if return_idx:
-#         return sorted_i
-#     elif return_both:
-#         return sorted_v, sorted_i
-#     else:
-#         return sorted_v
 
 
 def get_inputs(variables):
@@ -332,7 +278,7 @@ def clone_all(outputs):
 
 def clone_recursive(o, to_be_cloned, copies, outputs):
     dependencies = {}
-    for v in gen_variables(o, yield_on=lambda v: v in outputs, stop_on=lambda v: v in outputs):
+    for v in gen_variables(o, yield_on=lambda v: v in outputs, stop_on=lambda v: v in outputs, include_initials=False):
         if v in to_be_cloned:
             to_be_cloned.remove(v)
             dependencies[v] = clone_recursive(v, to_be_cloned, copies, outputs)

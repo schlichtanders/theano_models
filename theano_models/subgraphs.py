@@ -126,24 +126,6 @@ class Subgraph(MutableMapping):  # == HashableDict with unique name
     __repr__ = __str__
 
 
-class ModifySubgraph(Subgraph):
-    NONE = "__NONE__"
-
-    def __init__(self, base_dict, name=None, ignore=False, modify_getitem=lambda key, value: value):
-        self.modify_getitem = modify_getitem
-        if hasattr(base_dict, 'name'):
-            if name is None:
-                name = base_dict.name
-            else:
-                name = base_dict.name + "." + name
-        super(ModifySubgraph, self).__init__(base_dict, name, ignore)
-
-    def __getitem__(self, item):
-        ret = self.modify_getitem(item, self.references.get(item, self.NONE))
-        if ret == self.NONE:
-            raise KeyError("Key %s not found." % item)
-        return ret
-
 
 """
 decorator helpers
@@ -198,15 +180,10 @@ def subgraph_modify(dict_like):
             outputs = wrapped(*args, **kwargs)
             if isinstance(outputs, types.GeneratorType):
                 outputs = list(outputs)
-
-            def append_to(key, val):
-                if key == 'outputs':
-                    return outputs  # no extra references here, no val
-                elif key == 'inputs':
-                    return remove_duplicates(val + list(args))
-                return val
-
-            ModifySubgraph(base_subgraph, modify_getitem=append_to)
+            d = {k: v for k, v in base_subgraph.iteritems() if k not in outputting_references}
+            d['outputs'] = outputs
+            d['inputs'] = remove_duplicates(d['inputs'] + list(args))
+            Subgraph(d, name)
             return outputs
         return wrapper
     return decorator

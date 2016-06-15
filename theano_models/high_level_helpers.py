@@ -4,11 +4,13 @@ from __future__ import print_function, division
 from collections import Sequence
 
 import theano
+from schlichtanders.mymeta import proxify
 from theano import gof
 from theano.gof.graph import Variable
 from theano.compile import Function
 
-from subgraphs import Subgraph, subgraph_inputs, subgraph_outputs
+from subgraphs import Subgraph, subgraph_inputs, subgraph_outputs, total_size
+from theano_models import Model
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -59,6 +61,9 @@ def get_equiv_by_name(fct1, fct2):
             name_to_fct2[v2.name] = v2
 
     return {v1: name_to_fct2[n] for v1, n in fct1_to_name.iteritems()}
+
+
+
 
 
 

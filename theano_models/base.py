@@ -13,6 +13,7 @@ from functools import partial
 import numpy as np
 import theano
 import theano.tensor as T
+from theano.gof.fg import MissingInputError
 from schlichtanders.mycontextmanagers import until_stopped, ignored
 from theano import gof, config
 from theano.compile.sharedvalue import SharedVariable
@@ -33,6 +34,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 inputting_references.add("flat")
 
 theano.function
+theano.compile.pfunc
 theano.gof.opt.SeqOptimizer
 theano.gof.opt.MergeOptimizer
 theano.tensor.log
@@ -254,6 +256,7 @@ class Merge(Model):
         """
         convert_singletons_to_list = other_references.pop("convert_singletons_to_list", False)
         name = other_references.pop("name", None)
+        self.original_subgraphs = subgraphs
         self.copied_subgraphs = map(copy, subgraphs)
 
         # remove all nested references:
@@ -283,20 +286,28 @@ class Merge(Model):
         for k, v in other_references.iteritems():
             if hasattr(v, '__call__'):
                 other_references[k] = v(merge)
-        # now merge all
+
         for key in other_references:
             if other_references[key] is None:
                 del merge[key]
                 merge[key] = []
 
             elif isinstance(other_references[key], basestring):
-                old_key = other_references[key]
-                if key not in merge:
-                    merge[key] = merge[old_key]
-                elif isinstance(merge[key], list) or convert_singletons_to_list:
-                    merge[key] = convert(merge[key], list) + convert(merge[old_key], list)
+                new_key = other_references[key]
+                if new_key not in merge:
+                    merge[new_key] = merge[key]
+                elif isinstance(merge[new_key], list) or convert_singletons_to_list:
+                    merge[new_key] = convert(merge[new_key], list) + convert(merge[key], list)
                 # else nothing happens as subgraphs come before other_references (by syntax)
-                del merge[old_key]
+                # in every case delete old key, as it was remapped
+                del merge[key]
+                # old_key = other_references[key]
+                # if key not in merge:
+                #     merge[key] = merge[old_key]
+                # elif isinstance(merge[key], list) or convert_singletons_to_list:
+                #     merge[key] = convert(merge[key], list) + convert(merge[old_key], list)
+                # # else nothing happens as subgraphs come before other_references (by syntax)
+                # del merge[old_key]
             else:
                 if key not in merge:
                     merge[key] = other_references[key]
@@ -350,7 +361,7 @@ class Reparameterize(Model):
 
     The underlying new_params are listed as parameters in the model, while the reparameterized params are outputs
     """
-    def __init__(self, parameters, f, finv):
+    def __init__(self, parameters, f, finv, givens={}):
         """
         Parameters
         ----------
@@ -364,27 +375,31 @@ class Reparameterize(Model):
         assert all(is_clonable(param) for param in parameters), (
             "Can only flatten clonable parameters."
         )
-        new_underlying_parameters = []
-        for param in parameters:
-            cp_param = clone(param)
-            cp_param.name = (cp_param.name or str(cp_param))  # + "_copy"
-            new_param = subgraph_to_output(
-                finv(cp_param))  # clone is decisive as we otherwise get an infinite reference loop
-            new_param.name = cp_param.name + "_" + f.func_name  # naming is not needed if f, finv are Models
-            to_be_proxified_param = subgraph_to_output(f(new_param))
-            to_be_proxified_param.name = (param.name or str(param)) + "_reparam"
-            proxify(param, to_be_proxified_param)
-            new_underlying_parameters.append(new_param)
+        underlying_parameters = []
+        try:
+            cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens)()
+        except MissingInputError as e:
+            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+            # clone is decisive as we otherwise get an infinite reference loop
+            cp_parameters = map(clone, parameters)
+
+        for p, cp in izip(parameters, cp_parameters):
+            underlying_p = subgraph_to_output(finv(cp))
+            underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
+            new_p = subgraph_to_output(f(underlying_p))
+            new_p.name = (p.name or str(p)) + "_reparam"
+            proxify(p, new_p)
+            underlying_parameters.append(underlying_p)
         # return new_underlying_parameters[0] if is_singleton else new_underlying_parameters
         super(Reparameterize, self).__init__(
             inputs=[],
             outputs=parameters[0] if is_singleton else parameters,
-            parameters=new_underlying_parameters
+            parameters=underlying_parameters
         )
 
 
-class FlatKey(Model):
-    def __init__(self, model, key="parameters", flat_key="flat", initial_inputs=None):
+class Flatten(Model):
+    def __init__(self, parameters, flat_key="flat", givens={}):
         """ this does not work with subgraphs as substitution is required
 
         Parameters
@@ -393,21 +408,20 @@ class FlatKey(Model):
         key
         initial_inputs
         """
-        if initial_inputs is not None:
-            if not isinstance(model[key], Sequence):
-                raise ValueError("model[%s] is not Sequence. Nothing to flat." % key)
-            flat_sym = T.concatenate([p.flatten() for p in model[key]])
-            shapes_sym = [p.shape for p in model[key]]
-            f = theano.function(model['inputs'], [flat_sym] + shapes_sym, on_unused_input="warn")
-            _f = f(*initial_inputs)
+        try:
+            if not isinstance(parameters, Sequence):
+                raise ValueError("`parameters` is not Sequence. Nothing to flat.")
+            flat_sym = T.concatenate([p.flatten() for p in parameters])
+            shapes_sym = [p.shape for p in parameters]
+            _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens)()
             flat_num, shapes_num = _f[0], _f[1:]
             flat = as_tensor_variable(flat_num)
             # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
             # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
-            flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in model[key])
+            flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in parameters)
 
             i = 0
-            for p, shape in izip(model[key], shapes_num):
+            for p, shape in izip(parameters, shapes_num):
                 # for size and shapes we need to refer to the copies, as the original parameters get proxified
                 # (and size/shape refer to the parameters again)
                 size = np.prod(shape)
@@ -416,8 +430,9 @@ class FlatKey(Model):
                 proxify(p, new_p)
                 i += size
 
-        else:
-            assert all(is_clonable(p) for p in model[key]), "can only flatten clonable parameters"
+        except MissingInputError as e:
+            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+            assert all(is_clonable(p) for p in parameters), "can only flatten clonable parameters"
             # it is unfortunately not trivial how to flatten parameters
             # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
             # while both are parameters finally. If p3 comes before p1, we get that
@@ -427,13 +442,13 @@ class FlatKey(Model):
             # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
             # well formed theano variables. It is tree-like orderable.
 
-            copies = clone_all(model[key])
+            copies = clone_all(parameters)
             flat = T.concatenate([cp.flatten() for cp in copies])
             flat.name = '"%s"' % ":".join(cp.name for cp in copies)
             # Subgraph({'inputs': [], 'outputs': flat}, "symbolic_flat")  # to encapsulate the mess with clone_all TODO needed? seemed buggy
 
             i = 0
-            for p, cp in izip(model[key], copies):
+            for p, cp in izip(parameters, copies):
                 # for size and shapes we need to refer to the copies, as the original parameters get proxified
                 # (and size/shape refer to the parameters again)
                 new_p = flat[i:i + cp.size].reshape(cp.shape)
@@ -441,10 +456,10 @@ class FlatKey(Model):
                 proxify(p, new_p)
                 i += cp.size
 
-        super(FlatKey, self).__init__(**{
+        super(Flatten, self).__init__(**{
             'inputs': [],  # if flat_key='inputs' this gets overwritten by default dict behaviour
             flat_key: flat,
-            'outputs': model[key],
+            'outputs': parameters,
         })
 
 

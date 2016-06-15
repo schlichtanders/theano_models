@@ -162,7 +162,11 @@ class MyPyDotFormatter(object):
         inputs, outputs = fct_to_inputs_outputs(th_graph)
 
         if match_by_names:
-            all_variables = set(gen_variables(outputs, yield_on=lambda v: v.name is not None, stop_on=lambda v: v.owner is None))
+            all_variables = set(gen_variables(
+                outputs,
+                yield_on=lambda v: v.name is not None,
+                stop_on=lambda v: v.owner is None or is_pseudo_constant(v)
+            ))
             name_to_var = {v.name: v for v in all_variables}
             # transform all subgraphs respectively
             def transform_graph(sg):
@@ -179,7 +183,6 @@ class MyPyDotFormatter(object):
                             new_sg[key] = name_to_var[value.name]
                     # else ignore value
                 return Subgraph(new_sg, name=sg.name, ignore=True, no_unique_name=True)
-            _subgraphs = subgraphs
             subgraphs = map(transform_graph, subgraphs)
 
         # core parsing
@@ -246,9 +249,9 @@ class MyPyDotFormatter(object):
 
             # edges for Model or Node (external_inputs = [] for gof.Variable case)
             for ext_i in external_inputs:
-                if isinstance(var, Subgraph) and ext_i not in inputs and (ext_i.owner is None or is_pseudo_constant(ext_i)):
-                    ext_id = None  # skip this external input as it is only confusing
-                elif ext_i.owner is None or ext_i.name or ext_i in inputs or is_pseudo_constant(ext_i):  # make extra variable node
+                # if isinstance(var, Subgraph) and ext_i not in inputs and (ext_i.owner is None or is_pseudo_constant(ext_i)):
+                #     ext_id = None  # skip this external input as it is only confusing
+                if ext_i.owner is None or ext_i.name or ext_i in inputs or is_pseudo_constant(ext_i):  # make extra variable node
                     if ext_i not in topo:
                         topo.append(ext_i)
 
@@ -560,7 +563,7 @@ d3 vizualization
 """
 
 
-def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_names=False, copy_deps=True, *args, **kwargs):
+def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_names=False, copy_deps=True, generate_graph_files=False, *args, **kwargs):
     """Create HTML file with dynamic visualizing of a Theano function graph.
 
     In the HTML file, the whole graph or single nodes can be moved by drag and
@@ -610,8 +613,9 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_nam
     formatter = MyPyDotFormatter(*args, **kwargs)
     graph = formatter(th_graph, subgraphs, match_by_names=match_by_names)
 
-    with open('tmp.graph', "w") as f:
-        f.write(graph.to_string())  # for debugging
+    if generate_graph_files:
+        with open('tmp.graph', "w") as f:
+            f.write(graph.to_string())  # for debugging
 
     # with open('tmp.graph', "w") as f:
     #     f.write(graph.to_string())
@@ -622,8 +626,9 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_nam
     # dot_graph = graph.to_string()
 
     dot_graph = graph.create_dot()
-    with open("tmp.dot_graph", "w") as f:  # same for debugging purposes
-        f.write(dot_graph)
+    if generate_graph_files:
+        with open("tmp.dot_graph", "w") as f:  # same for debugging purposes
+            f.write(dot_graph)
     if not six.PY2:
         dot_graph = dot_graph.decode('utf8')
 
