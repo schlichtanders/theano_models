@@ -39,6 +39,7 @@ theano.gof.opt.SeqOptimizer
 theano.gof.opt.MergeOptimizer
 theano.tensor.log
 theano.gof.fg
+from theano.tensor.shared_randomstreams import RandomStreams
 
 """
 Subgraph with substitution == Model

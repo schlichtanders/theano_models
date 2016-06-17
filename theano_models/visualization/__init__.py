@@ -27,7 +27,7 @@ import subprocess
 from theano_models.extra_helpers import fct_to_inputs_outputs
 from ..deterministic_models import InvertibleModel
 from ..subgraphs import Subgraph, inputting_references, outputting_references, subgraph_inputs, subgraph_outputs
-from ..util.theano_helpers import is_pseudo_constant, gen_variables
+from ..util.theano_helpers import is_pseudo_constant, gen_variables, get_profile
 from ..util import deepflatten_keep_vars
 import json
 
@@ -149,15 +149,8 @@ class MyPyDotFormatter(object):
 
         self.__nodes = {}
 
-        if _profile is None and isinstance(th_graph, Function):
-            mode = th_graph.maker.mode
-            if (not isinstance(mode, ProfileMode) or
-                    th_graph not in mode.profile_stats):
-                mode = None
-            if mode:
-                _profile = mode.profile_stats[th_graph]
-            else:
-                _profile = getattr(th_graph, "profile", None)
+        if _profile is None:
+            _profile = get_profile(th_graph)
 
         inputs, outputs = fct_to_inputs_outputs(th_graph)
 

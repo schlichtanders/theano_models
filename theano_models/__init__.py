@@ -13,7 +13,7 @@ from extra_helpers import fct_to_inputs_outputs, get_equiv_by_name
 from placeholders import Placeholder
 
 # standard helpers
-from util import as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams
+from util import as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams, get_inputs, get_profile, clone_renew_rng
 
 from composing import variational_bayes, normalizing_flow
 

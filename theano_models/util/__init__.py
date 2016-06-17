@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 from itertools import izip
 import theano.tensor as T
-from theano_helpers import as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams # because this is so central
+from theano_helpers import as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams, get_inputs, get_profile, clone_renew_rng # because this is so central
+
 from theano import gof
 from collections import Sequence, MutableMapping
 from schlichtanders.mymeta import proxify

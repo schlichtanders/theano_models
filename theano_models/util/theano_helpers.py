@@ -15,6 +15,9 @@ import numpy
 import numpy as np
 
 import theano
+from schlichtanders.mycontextmanagers import ignored
+from schlichtanders.myfunctools import convert
+from schlichtanders.mylists import remove_duplicates
 from theano import config, gof, clone as _clone
 import theano.tensor as T
 from theano.tensor.basic import as_tensor_variable as _as_tensor_variable
@@ -53,14 +56,17 @@ def as_tensor_variable(x, name=None, ndim=None):
     if not isinstance(x, Variable):
         x = np.array(x, copy=False, dtype=config.floatX)
     ret = _as_tensor_variable(x, name, ndim)
-    if name is not None:  # this seems not be the case
+    if name is not None:  # some internal problems that this is not always the case?
         ret.name = name
+    # this is decisive as our "constants" should be replacable usually,
+    # however a constant won't get cloned
+    # the least effort is to add an extra trivial layer which makes a constant a normal variable
+    # this layer gets optimized away when compiling the function
     if isinstance(ret, TensorConstant):
-        quasi_constant = T.tensor_copy(ret)
+        quasi_constant = T.tensor_copy(ret)  # = elemwise identity
         quasi_constant.name = ret.name if ret.name is not None else str(ret)
-        return quasi_constant  # tensor_copy is only a (bad) name for tensor_identity
-    else:
-        return ret
+        return quasi_constant
+    return ret
 
 
 def is_pseudo_constant(var):
@@ -118,7 +124,33 @@ print n, n.eval()
 # my own implementation seems to have a deep-sitting bug
 clone = _clone
 
-""" monkey patch OpFromGraph to support outer input arguments """
+
+"""
+clone with replacing random variables
+"""
+
+@wraps(clone)
+def clone_renew_rng(output,
+          replace=None,
+          strict=True,
+          share_inputs=True,
+          copy_inputs=DEPRECATED_ARG):
+    replace_rv = {}
+    for a in gen_variables(output, yield_on=lambda v: hasattr(v, 'rng')):
+        rng1 = copy(a.rng)
+        rng2 = copy(rng1)
+        b = clone(a, replace={a.owner.inputs[0]: rng1})
+        b.rng = rng1
+        b.update = (rng1, rng2)
+        replace_rv[a] = b
+    if replace:
+        replace_rv.update(replace)
+    return clone(output, replace=replace_rv, strict=strict, share_inputs=share_inputs, copy_inputs=copy_inputs)
+
+
+"""
+monkey patch OpFromGraph to support outer input arguments
+"""
 
 def OpFromGraph__init__(self, inputs, outputs, **kwargs):
     if not isinstance(outputs, list):
@@ -208,28 +240,27 @@ theano graph traverse helpers
 
 
 def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: False):
-    if not isinstance(initial_variables, Sequence):
-        initial_variables = [initial_variables]
+    initial_variables = convert(initial_variables, Sequence)
     for v in initial_variables:
         for _v in _gen_nodes(v, yield_on=yield_on, stop_on=stop_on):  # yield from
             yield _v
 
 
 def _gen_nodes(v, yield_on=lambda n: True, stop_on=lambda v: False):
+    if v.owner is None:
+        return
     if yield_on(v.owner):
         yield v.owner
     if stop_on(v.owner):
         return
     for _v in v.owner.inputs:
-        if v.owner is not None:
-            for n in _gen_nodes(_v, yield_on=yield_on, stop_on=stop_on):  # yield from
-                yield n
+        for n in _gen_nodes(_v, yield_on=yield_on, stop_on=stop_on):  # yield from
+            yield n
 
 
-def gen_variables(initial_variables, yield_on=lambda v: v.owner is None, stop_on=lambda v: False, include_initials=True):
+def gen_variables(initial_variables, yield_on=lambda v: True, stop_on=lambda v: False, include_initials=True):
     """ first level is not tested """
-    if not isinstance(initial_variables, Sequence):
-        initial_variables = [initial_variables]
+    initial_variables = convert(initial_variables, Sequence)
     if include_initials:
         for v in initial_variables:
             for _v in _gen_variables(v, yield_on=yield_on, stop_on=stop_on):  # yield from
@@ -245,12 +276,13 @@ def gen_variables(initial_variables, yield_on=lambda v: v.owner is None, stop_on
 def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
     if yield_on(v):
         yield v
+    if v.owner is None:
+        return
     if stop_on(v):
         return
-    if v.owner is not None:
-        for _v in v.owner.inputs:
-            for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
-                yield __v
+    for _v in v.owner.inputs:
+        for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
+            yield __v
 
 
 def get_inputs(variables):
@@ -463,3 +495,96 @@ class PooledRandomStreams(object):
     #     shuffled = tensor.permute_row_elements(input, perm)
     #     shuffled.permutation = perm
     #     return shuffled
+
+
+"""
+intersecting graphs
+===================
+"""
+
+def independent_subgraphs(inputs1, inputs2, outputs):
+    outputs = convert(outputs, Sequence)
+    for n in gen_nodes(outputs):
+        for i in n.inputs:
+            if not hasattr(i, '_clients'):
+                i._clients = set()
+            i._clients.add(n)
+
+    # reversed descendants:
+    descendants1 = list(_collect_descendents(inputs1))[::-1]
+    descendants2 = list(_collect_descendents(inputs2))[::-1]
+    remove_duplicates(descendants1)  # this seems to be decisive
+    remove_duplicates(descendants2)
+
+    uniques1 = []
+    uniques2 = []
+
+    # Note for using [] instead of set():
+    # as each output has only 1 owner and we remove the owner from the descendents as soon as one is found,
+    # we indeed can use [] simply, and still get unique entries
+
+    def collect_first_uniques(outputs):
+        for o in outputs:
+            if o.owner is None:
+                break
+            in1, in2 = True, True
+            try:
+                descendants1.remove(o.owner)
+            except ValueError:
+                in1 = False
+            try:
+                descendants2.remove(o.owner)
+            except ValueError:
+                in2 = False
+
+            if in1 and in2:
+                # recursive call
+                collect_first_uniques(o.owner.inputs)
+            # no recursion:
+            elif not in1:
+                uniques2.append(o)
+            elif not in2:
+                uniques1.append(o)
+            # else  not in1 and not in2 -> nothing and no recursion
+
+    collect_first_uniques(outputs)
+    # for debugging purposes:
+    # for i, u in enumerate(uniques1):
+    #     u.name = "unique1." + str(i)
+    # for i, u in enumerate(uniques2):
+    #     u.name = "unique2." + str(i)
+    return uniques1, uniques2
+
+
+def _collect_descendents(inputs):
+    for i in inputs:
+        try:
+            for n in i._clients:
+                yield n
+                for d in _collect_descendents(n.outputs):  # yield from
+                    yield d
+        except AttributeError:
+            pass
+
+
+
+
+
+
+"""
+Profiling
+=========
+"""
+
+
+def get_profile(fct):
+    if isinstance(fct, Function):
+        mode = fct.maker.mode
+        if not isinstance(mode, ProfileMode) or fct not in mode.profile_stats:
+            mode = None
+        if mode:
+            return mode.profile_stats[fct]
+        return getattr(fct, "profile", None)
+    return None
+
+
