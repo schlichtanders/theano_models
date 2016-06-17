@@ -4,13 +4,14 @@ from __future__ import print_function, division
 from collections import Sequence
 
 import theano
+from schlichtanders.mylists import as_list
 from schlichtanders.mymeta import proxify
 from theano import gof
 from theano.gof.graph import Variable
 from theano.compile import Function
 
 from subgraphs import Subgraph, subgraph_inputs, subgraph_outputs, total_size
-from theano_models import Model
+from base import Model, Merge
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -25,6 +26,12 @@ def fct_to_inputs_outputs(th_graph):
         inputs = th_graph.inputs
     elif isinstance(th_graph, tuple) and len(th_graph) == 2:
         inputs, outputs = th_graph
+    elif isinstance(th_graph, list):  # assume each entry is a th_graph itself
+        def subgraphs():
+            for sub_graph in th_graph:
+                inputs, outputs = fct_to_inputs_outputs(sub_graph)
+                yield Subgraph(ignore=True, inputs=inputs, outputs=outputs)
+        inputs, outputs = fct_to_inputs_outputs(Merge(*subgraphs()))
     elif isinstance(th_graph, Subgraph):
         # inputs, outputs = th_graph['inputs'], th_graph['outputs']
         inputs, outputs = subgraph_inputs(th_graph), subgraph_outputs(th_graph)

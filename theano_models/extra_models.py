@@ -17,6 +17,7 @@ from schlichtanders.mymeta import proxify
 import warnings
 
 
+# DEPRECATED, better use PooledRandomStream from util.theano_helpers instead of the standard random number generator
 class NoisePool(Model):
 
     def __init__(self, noise_parameters, pool_size=int(1e8), noise_parameters_source='normal', givens={}):
