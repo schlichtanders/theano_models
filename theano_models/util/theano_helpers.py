@@ -17,7 +17,7 @@ import numpy as np
 import theano
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myfunctools import convert
-from schlichtanders.mylists import remove_duplicates
+from schlichtanders.mylists import remove_duplicates, shallowflatten, add_up
 from theano import config, gof, clone as _clone
 import theano.tensor as T
 from theano.tensor.basic import as_tensor_variable as _as_tensor_variable
@@ -240,55 +240,103 @@ theano graph traverse helpers
 
 
 def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: False):
-    initial_variables = convert(initial_variables, Sequence)
-    for v in initial_variables:
-        for _v in _gen_nodes(v, yield_on=yield_on, stop_on=stop_on):  # yield from
-            yield _v
+    if isinstance(initial_variables, Sequence):
+        agenda = list(initial_variables)
+    else:
+        agenda = [initial_variables]
+    # uniques stores all unique values found overall, while agenda only stores those which are still to come
+    remove_duplicates(agenda)
+    uniques = set(agenda)
+    while agenda:
+        v = agenda.pop(0)
+        if v.owner is None:  # don't yield None values
+            continue
+        if yield_on(v.owner):
+            yield v.owner
+        if stop_on(v.owner):
+            continue
+
+        for i in v.owner.inputs:
+            if i not in uniques:
+                agenda.append(i)
+                uniques.add(i)
 
 
-def _gen_nodes(v, yield_on=lambda n: True, stop_on=lambda v: False):
-    if v.owner is None:
-        return
-    if yield_on(v.owner):
-        yield v.owner
-    if stop_on(v.owner):
-        return
-    for _v in v.owner.inputs:
-        for n in _gen_nodes(_v, yield_on=yield_on, stop_on=stop_on):  # yield from
-            yield n
+# # depth first search:
+# def gen_nodes(initial_variables, yield_on=lambda n: True, stop_on=lambda v: False):
+#     initial_variables = convert(initial_variables, Sequence)
+#     for v in initial_variables:
+#         for _v in _gen_nodes(v, yield_on=yield_on, stop_on=stop_on):  # yield from
+#             yield _v
+#
+#
+# def _gen_nodes(v, yield_on=lambda n: True, stop_on=lambda v: False):
+#     if v.owner is None:
+#         return
+#     if yield_on(v.owner):
+#         yield v.owner
+#     if stop_on(v.owner):
+#         return
+#     for _v in v.owner.inputs:
+#         for n in _gen_nodes(_v, yield_on=yield_on, stop_on=stop_on):  # yield from
+#             yield n
 
 
 def gen_variables(initial_variables, yield_on=lambda v: True, stop_on=lambda v: False, include_initials=True):
-    """ first level is not tested """
-    initial_variables = convert(initial_variables, Sequence)
-    if include_initials:
-        for v in initial_variables:
-            for _v in _gen_variables(v, yield_on=yield_on, stop_on=stop_on):  # yield from
-                yield _v
+    if isinstance(initial_variables, Sequence):
+        agenda = list(initial_variables)
     else:
-        for v in initial_variables:
-            if v.owner is not None:
-                for _v in v.owner.inputs:
-                    for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
-                        yield __v
+        agenda = [initial_variables]
+    if not include_initials:
+        # make sure there are no duplicates
+        agenda = add_up(v.owner.inputs for v in agenda if v.owner is not None)
+    remove_duplicates(agenda)
+    uniques = set(agenda)
+    while agenda:
+        v = agenda.pop(0)
+        if yield_on(v):
+            yield v
+        if stop_on(v) or v.owner is None:
+            continue
+
+        for i in v.owner.inputs:
+            if i not in uniques:
+                agenda.append(i)
+                uniques.add(i)
 
 
-def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
-    if yield_on(v):
-        yield v
-    if v.owner is None:
-        return
-    if stop_on(v):
-        return
-    for _v in v.owner.inputs:
-        for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
-            yield __v
+# # depth first search:
+# def gen_variables(initial_variables, yield_on=lambda v: True, stop_on=lambda v: False, include_initials=True):
+#     """ first level is not tested """
+#     initial_variables = convert(initial_variables, Sequence)
+#     if include_initials:
+#         for v in initial_variables:
+#             for _v in _gen_variables(v, yield_on=yield_on, stop_on=stop_on):  # yield from
+#                 yield _v
+#     else:
+#         for v in initial_variables:
+#             if v.owner is not None:
+#                 for _v in v.owner.inputs:
+#                     for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
+#                         yield __v
+#
+#
+# def _gen_variables(v, yield_on=lambda v: v.owner is None, stop_on=lambda v: False):
+#     if yield_on(v):
+#         yield v
+#     if v.owner is None:
+#         return
+#     if stop_on(v):
+#         return
+#     for _v in v.owner.inputs:
+#         for __v in _gen_variables(_v, yield_on=yield_on, stop_on=stop_on):  #yield from
+#             yield __v
 
 
 def get_inputs(variables):
     def leaf(v):
         return v.owner is None or is_pseudo_constant(v)
-    return list(set(gen_variables(variables, yield_on=leaf, stop_on=leaf)))
+    return list(gen_variables(variables, yield_on=leaf, stop_on=leaf))
 
 
 """
@@ -502,6 +550,7 @@ intersecting graphs
 ===================
 """
 
+
 def independent_subgraphs(inputs1, inputs2, outputs):
     outputs = convert(outputs, Sequence)
     for n in gen_nodes(outputs):
@@ -510,11 +559,9 @@ def independent_subgraphs(inputs1, inputs2, outputs):
                 i._clients = set()
             i._clients.add(n)
 
-    # reversed descendants:
+    # reversed descendants as we will search from outputs backwards:
     descendants1 = list(_collect_descendents(inputs1))[::-1]
     descendants2 = list(_collect_descendents(inputs2))[::-1]
-    remove_duplicates(descendants1)  # this seems to be decisive
-    remove_duplicates(descendants2)
 
     uniques1 = []
     uniques2 = []
@@ -522,9 +569,13 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     # Note for using [] instead of set():
     # as each output has only 1 owner and we remove the owner from the descendents as soon as one is found,
     # we indeed can use [] simply, and still get unique entries
+    # (descendants having unique elements is essential for this)
 
     def collect_first_uniques(outputs):
-        for o in outputs:
+        agenda = list(outputs)
+        # we don't use uniques here, as the duplicates probably appear at the end
+        while agenda:
+            o = agenda.pop(0)
             if o.owner is None:
                 break
             in1, in2 = True, True
@@ -538,14 +589,13 @@ def independent_subgraphs(inputs1, inputs2, outputs):
                 in2 = False
 
             if in1 and in2:
-                # recursive call
-                collect_first_uniques(o.owner.inputs)
-            # no recursion:
+                agenda += o.owner.inputs
+            # for all other option, no increase of agenda
             elif not in1:
                 uniques2.append(o)
             elif not in2:
                 uniques1.append(o)
-            # else  not in1 and not in2 -> nothing and no recursion
+            # else  not in1 and not in2 -> nothing to do
 
     collect_first_uniques(outputs)
     # for debugging purposes:
@@ -557,12 +607,19 @@ def independent_subgraphs(inputs1, inputs2, outputs):
 
 
 def _collect_descendents(inputs):
-    for i in inputs:
+    agenda = list(inputs)
+    remove_duplicates(agenda)
+    uniques = set(agenda)
+    while agenda:
+        i = agenda.pop(0)
         try:
             for n in i._clients:
                 yield n
-                for d in _collect_descendents(n.outputs):  # yield from
-                    yield d
+
+                for o in n.outputs:
+                    if o not in uniques:
+                        agenda.append(o)
+                        uniques.add(o)
         except AttributeError:
             pass
 
