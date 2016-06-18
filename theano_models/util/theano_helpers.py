@@ -552,6 +552,18 @@ intersecting graphs
 
 
 def independent_subgraphs(inputs1, inputs2, outputs):
+    """
+    computes subgraphs for inputs1 only and inputs2 only
+    Parameters
+    ----------
+    inputs1 : list of theano variables
+    inputs2 : list of theano variables
+    outputs : list of theano variables or single theano variable
+
+    Returns
+    -------
+    tuple with entry being list of theano-expressions which denote the end of the respective inputsX-only subgraph
+    """
     outputs = convert(outputs, Sequence)
     for n in gen_nodes(outputs):
         for i in n.inputs:
@@ -560,8 +572,8 @@ def independent_subgraphs(inputs1, inputs2, outputs):
             i._clients.add(n)
 
     # reversed descendants as we will search from outputs backwards:
-    descendants1 = list(_collect_descendents(inputs1))[::-1]
-    descendants2 = list(_collect_descendents(inputs2))[::-1]
+    descendants1 = _collect_descendants(inputs1)[::-1]
+    descendants2 = _collect_descendants(inputs2)[::-1]
 
     uniques1 = []
     uniques2 = []
@@ -576,19 +588,17 @@ def independent_subgraphs(inputs1, inputs2, outputs):
         # we don't use uniques here, as the duplicates probably appear at the end
         while agenda:
             o = agenda.pop(0)
-            if o.owner is None:
-                break
             in1, in2 = True, True
             try:
-                descendants1.remove(o.owner)
+                descendants1.remove(o)
             except ValueError:
                 in1 = False
             try:
-                descendants2.remove(o.owner)
+                descendants2.remove(o)
             except ValueError:
                 in2 = False
 
-            if in1 and in2:
+            if in1 and in2 and o.owner is not None:
                 agenda += o.owner.inputs
             # for all other option, no increase of agenda
             elif not in1:
@@ -606,26 +616,20 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     return uniques1, uniques2
 
 
-def _collect_descendents(inputs):
-    agenda = list(inputs)
-    remove_duplicates(agenda)
-    uniques = set(agenda)
-    while agenda:
-        i = agenda.pop(0)
+def _collect_descendants(inputs):
+    descendants = list(inputs)
+    remove_duplicates(descendants)
+    uniques = set(descendants)
+    for d in descendants:
         try:
-            for n in i._clients:
-                yield n
-
+            for n in d._clients:
                 for o in n.outputs:
                     if o not in uniques:
-                        agenda.append(o)
+                        descendants.append(o)
                         uniques.add(o)
         except AttributeError:
             pass
-
-
-
-
+    return descendants  # unique and width-first sorted variables
 
 
 """

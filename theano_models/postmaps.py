@@ -237,12 +237,9 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
         if pre_compile_parameters_subgraph:
             # we are only interested in subgraph of parameters
             sub, _ = independent_subgraphs([parameters], model['loss_inputs'], outputs)
-            try:
-                fparam = theano_function([parameters], sub)
-                foutput = theano_function(sub + model['loss_inputs'], outputs)
-            except MissingInputError:
-                fparam = theano_function([parameters], [parameters] + sub)
-                foutput = theano_function([parameters] + sub + model['loss_inputs'], outputs)
+            # ``sub`` includes everything needed for computing outputs beside loss_inputs
+            fparam = theano_function([parameters], sub)
+            foutput = theano_function(sub + model['loss_inputs'], outputs)
 
             if mapreduce is not None:
                 def f(parameters, *loss_inputs):
