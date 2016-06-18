@@ -575,45 +575,37 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     descendants1 = _collect_descendants(inputs1)[::-1]
     descendants2 = _collect_descendants(inputs2)[::-1]
 
-    uniques1 = []
-    uniques2 = []
+    independent_subgraphs1 = []
+    independent_subgraphs2 = []
 
-    # Note for using [] instead of set():
-    # as each output has only 1 owner and we remove the owner from the descendents as soon as one is found,
-    # we indeed can use [] simply, and still get unique entries
-    # (descendants having unique elements is essential for this)
+    # collect these subgraphs:
+    # ------------------------
+    agenda = list(outputs)
+    remove_duplicates(agenda)
+    uniques = set()  # pass each variable (at most) once
+    while agenda:
+        o = agenda.pop(0)
+        in1, in2 = True, True
+        try:
+            descendants1.remove(o)
+        except ValueError:
+            in1 = False
+        try:
+            descendants2.remove(o)
+        except ValueError:
+            in2 = False
 
-    def collect_first_uniques(outputs):
-        agenda = list(outputs)
-        # we don't use uniques here, as the duplicates probably appear at the end
-        while agenda:
-            o = agenda.pop(0)
-            in1, in2 = True, True
-            try:
-                descendants1.remove(o)
-            except ValueError:
-                in1 = False
-            try:
-                descendants2.remove(o)
-            except ValueError:
-                in2 = False
-
-            if in1 and in2 and o.owner is not None:
-                agenda += o.owner.inputs
-            # for all other option, no increase of agenda
-            elif not in1:
-                uniques2.append(o)
-            elif not in2:
-                uniques1.append(o)
-            # else  not in1 and not in2 -> nothing to do
-
-    collect_first_uniques(outputs)
-    # for debugging purposes:
-    # for i, u in enumerate(uniques1):
-    #     u.name = "unique1." + str(i)
-    # for i, u in enumerate(uniques2):
-    #     u.name = "unique2." + str(i)
-    return uniques1, uniques2
+        if in1 and not in2:
+            independent_subgraphs1.append(o)
+        elif not in1 and in2:
+            independent_subgraphs2.append(o)
+        elif in1 and in2 and o.owner is not None:
+            for i in o.owner.inputs:
+                if i not in uniques:
+                    agenda.append(i)
+                    uniques.add(i)
+        # else  not in1 and not in2 -> nothing to do
+    return independent_subgraphs1, independent_subgraphs2
 
 
 def _collect_descendants(inputs):
