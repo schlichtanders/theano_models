@@ -189,7 +189,8 @@ Numericalize Postmaps
 def flat_numericalize_postmap(model, flat_key="flat", mode=None,
                               annealing_combiner=None, mapreduce=None,
                               save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps,
-                              pre_compile_parameters_subgraph=False,
+                              pre_compile={'num_loss': True, 'num_jacobian': False, 'num_hessian': False},
+                              batch_size=None,
                               profile=False):
     """ postmap to offer an interface for standard numerical optimizer
 
@@ -212,12 +213,23 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
         NON-OPTIONAL!! (because this hidden behaviour might easily lead to weird bugs)
     adapt_init_params : function numpy-vector -> numpy-vector
         for further control of initial parameters
+    pre_compile : dictionary of pre_compile flags for the function compilation
+        default is chosen such that in the test case the performance was optimal (both in compile time and runtime)
+        special keys::
+            False - no pre_compilation at all
+            True - pre_compilation on model itself
+            'use_compiled_functions' - like True, but with pre_compilation based on the optimized graph
+            'build_batch_theano_graph' - only for very small batch sizes. Computes a theanograph for everything
+    batch_size : int
+        needed for pre_compile option 'build_batch_theano_graph' (however not recommended for large batch_sizes)
 
     Returns
     -------
     DefaultDict over model
     """
     assert (not isinstance(model[flat_key], Sequence)), "need single flat vector"
+    if pre_compile == "build_batch_theano_graph" and batch_size is None:
+        raise ValueError("Need batch_size for pre_compile_mode='build_batch_theano_graph'.")
     if initial_inputs is None:
         raise ValueError("Need ``initial_inputs`` to prevent subtle bugs. If really no inputs are needed, please supply"
                          "empty list [] as kwarg.")
@@ -233,17 +245,43 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
         update(kwargs, general_theano_kwargs, overwrite=False)
         return theano.function(*args, **kwargs)
 
-    def function(outputs):
+    def function(outputs, pre_compile):
         """ compiles function with signature f(params, *loss_inputs) """
-        if pre_compile_parameters_subgraph:
+        if pre_compile == "build_batch_theano_graph":  # batch_size != None must be ensured (see ValueError above)
+            # TODO this pattern seems to be useful very very often, however compilation time is almost infinite (felt like that)
+            # TODO ask on theano, whether this pattern can be made more efficient
+            # build new loss_inputs with extra dimension (will be regarded as first dimension)
+            batch_loss_inputs = [T.TensorType(i.dtype, i.broadcastable + (False,))(i.name + ("" if i.name is None else "R"))
+                                for i in model['loss_inputs']]
+            def clones():
+                for i in xrange(batch_size):
+                    yield clone_renew_rng(outputs, replace=dict(izip(model['loss_inputs'], [a[i] for a in batch_loss_inputs])))
+            batch_outputs = T.add(*clones())
+            f = theano_function([parameters] + batch_loss_inputs, batch_outputs)
+
+        elif pre_compile:
             # we need to handle randomness per sample
             # using model['noise'] is confusing when using another rng in the background, as then the randomness occurs
             # before and hence can go into ``sub``
             # therefore we always search for rng automatically
-            noise_source = list_random_sources(outputs)
-            # we are only interested in subgraph of parameters
+            if pre_compile == "use_compiled_functions":
+                singleton = not isinstance(outputs, Sequence)
+                _f = theano_function([parameters] + model['loss_inputs'], outputs)
+                noise_source = []
+                for i, s in izip(_f.maker.inputs, _f.input_storage):
+                    if s.data is not None:
+                        if str(i.variable) == '<RandomStateType>':
+                            noise_source.append(i.variable)
+                outputs = [o.variable for o in _f.maker.outputs]
+                if singleton:
+                    outputs = outputs[0]
+            else:
+                # standard precompile version, note that this can be significantly slower than without using any precompile
+                noise_source = list_random_sources(outputs)
+
+            # further the subgraph ``sub`` is computed
+            # it includes everything needed for separating parameters from outputs
             sub, _ = independent_subgraphs([parameters], model['loss_inputs'] + noise_source, outputs)
-            # ``sub`` includes everything needed for computing outputs beside loss_inputs
             fparam = theano_function([parameters], sub)
             foutput = theano_function(sub + model['loss_inputs'], outputs)
 
@@ -257,6 +295,7 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
                 def f(parameters, *loss_inputs):
                     return foutput(*(fparam(parameters) + list(loss_inputs)))
             f.wrapped = fparam, foutput
+
         else:
             _f = theano_function([parameters] + model['loss_inputs'], outputs)
             if mapreduce is not None:
@@ -264,20 +303,20 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
                     def h(*inner_loss_inputs):
                         return _f(parameters, *inner_loss_inputs)
                     return mapreduce(h, *loss_inputs)
+                f.wrapped = _f
             else:
                 f = _f
-            f.wrapped = _f
         return f
 
     def numericalize(key):
         try:
             if annealing_combiner:
                 return annealing_combiner(
-                    function(derivatives[key]("loss_data")),
-                    function(derivatives[key]("loss_regularizer"))
+                    function(derivatives[key]("loss_data"), pre_compile[key]),
+                    function(derivatives[key]("loss_regularizer"), pre_compile[key])
                 )
             else:
-                return function(derivatives[key]("loss"))
+                return function(derivatives[key]("loss"), pre_compile[key])
         except (KeyError, TypeError, ValueError) as e:
             raise KeyError("requested key %s not computable. Internal Error: %s" % (key, e))
         except AssertionError:
