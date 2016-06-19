@@ -12,8 +12,9 @@ from schlichtanders.mylists import as_list
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
 from schlichtanders.myfunctools import fmap
+from util import list_random_sources
 
-from subgraphs import norm_distance, L2
+from subgraphs_tools import norm_distance, L2
 from theano.gof.fg import MissingInputError
 from theano_models.util.theano_helpers import independent_subgraphs
 from util import clone_renew_rng
@@ -235,8 +236,13 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
     def function(outputs):
         """ compiles function with signature f(params, *loss_inputs) """
         if pre_compile_parameters_subgraph:
+            # we need to handle randomness per sample
+            # using model['noise'] is confusing when using another rng in the background, as then the randomness occurs
+            # before and hence can go into ``sub``
+            # therefore we always search for rng automatically
+            noise_source = list_random_sources(outputs)
             # we are only interested in subgraph of parameters
-            sub, _ = independent_subgraphs([parameters], model['loss_inputs'], outputs)
+            sub, _ = independent_subgraphs([parameters], model['loss_inputs'] + noise_source, outputs)
             # ``sub`` includes everything needed for computing outputs beside loss_inputs
             fparam = theano_function([parameters], sub)
             foutput = theano_function(sub + model['loss_inputs'], outputs)

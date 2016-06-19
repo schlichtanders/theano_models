@@ -27,7 +27,8 @@ from util import clone, as_tensor_variable, deepflatten_keep_vars, U
 from util.theano_helpers import is_clonable, get_inputs, clone_all
 import types
 
-from subgraphs import subgraph_to_output, subgraphs_as_outputs, complex_reshape, Subgraph, inputting_references, outputting_references
+from subgraphs import subgraph_to_output, subgraphs_as_outputs, Subgraph, inputting_references, outputting_references
+from subgraphs_tools import complex_reshape
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 

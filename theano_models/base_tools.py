@@ -10,7 +10,7 @@ from theano import gof
 from theano.gof.graph import Variable
 from theano.compile import Function
 
-from subgraphs import Subgraph, subgraph_inputs, subgraph_outputs, total_size
+from subgraphs import Subgraph, subgraph_inputs, subgraph_outputs
 from base import Model, Merge
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'

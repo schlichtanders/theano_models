@@ -16,7 +16,8 @@ from breze.arch.component import transfer as _transfer
 
 from collections import Sequence
 
-from subgraphs import subgraphs_as_outputs, subgraph_to_output, softplus, inputting_references, outputting_references, Subgraph
+from subgraphs import subgraphs_as_outputs, subgraph_to_output, inputting_references, outputting_references, Subgraph
+from subgraphs_tools import softplus
 from base import Model, merge_key
 from util import as_tensor_variable, clone, U
 from placeholders import Placeholder

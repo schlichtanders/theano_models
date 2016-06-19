@@ -129,6 +129,11 @@ clone = _clone
 clone with replacing random variables
 """
 
+
+def list_random_sources(outputs):
+    return list(gen_variables(outputs, yield_on=lambda v: hasattr(v, 'rng')))
+
+
 @wraps(clone)
 def clone_renew_rng(output,
           replace=None,

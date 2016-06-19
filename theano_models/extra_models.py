@@ -26,7 +26,7 @@ class NoisePool(Model):
 
         try:  # by default always try to reduce numeric values for shape (as it turns out, theano is currently not able to optimize this by itself)
             shapes = function([], [p.shape for p in noise_parameters], on_unused_input="ignore", givens=givens)()
-        except MissingInputError:
+        except MissingInputError as e:
             warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
             # theano does not seem to be able to infer shape without computing random numbers
             # (which this exactly wants to prevent)
