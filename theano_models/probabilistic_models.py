@@ -5,8 +5,10 @@ from __future__ import division
 import numpy as np
 import theano.tensor as T
 import theano
+from theano.ifelse import ifelse
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
+from theano.printing import Print
 
 import subgraphs
 from subgraphs import subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
@@ -22,7 +24,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 RNG = RandomStreams()
 
 outputting_references.update(['logP'])
-inputting_references.update(['parameters', 'parameters_positive', 'parameters_pvalues', 'noise'])
+inputting_references.update(['parameters', 'parameters_positive', 'parameters_psumto1', 'noise'])
 
 """
 Probabilistic Modelling
@@ -172,7 +174,6 @@ class GaussianNoise(Model):
         rng : Theano RandomStreams object, optional.
             Random number generator to draw samples from the distribution from.
         """
-        print(RNG)
         self.rng = rng or RNG
         if input is None:
             input = T.dvector()
@@ -245,7 +246,6 @@ class DiagGaussianNoise(Model):
             indicates whether logarithm shall be computed by log2 instead of log
             (on some machines improvement of factor 2 or more for big N)
         """
-        print(RNG)
         self.rng = rng or RNG
         if input is None:
             input = T.dvector()
@@ -446,7 +446,7 @@ class Categorical(Model):
             super(Categorical, self).__init__(
                 inputs=[],
                 outputs=self.rng.multinomial(pvals=self.probs),
-                parameters_pvalues=[probs],
+                parameters_psumto1=[probs],
             )
             # logP needs to be added after Model creation, as it is kind of an alternative view of the model
             # to support this view, we need to reference self:
@@ -542,25 +542,38 @@ class Mixture(Model):
             length should be equal to len(prob_models)
             should sum up to 1
         rng: RandomStreams
+        kwargs : kwargs
+            everything else in kwargs will be passed to the internal Merge
         """
         # TODO assert same length of prob_models and init_mixture_params? theano...
         # initialize to uniform if not given otherwise
-        self.mixture_probs = kwargs.pop('init_mixture_probs', T.ones((len(prob_models),)) / len(prob_models))
+        self.mixture_probs = as_tensor_variable(
+            kwargs.pop('init_mixture_probs', np.ones((len(prob_models),)) / len(prob_models)),
+            "mixture_probs"
+        )
         self.rng = kwargs.pop('rng', RNG)
-        merge = Merge(*prob_models)
+        merge = Merge(*prob_models, **kwargs)
 
         @subgraphs_as_outputs
         @subgraph_modify(merge)
         def logP(rv):
             # we use a numerical stable version of the log applied to sum of exponentials:
             logPs = [m['logP'](rv) for m in prob_models]
+            ps = [self.mixture_probs[i] for i in xrange(len(logPs))]  # we cannot iterate through symbolic mixture_probs, but we can index
             max_logP = T.largest(*logPs)
-            h = (c * T.exp(lP - max_logP) for c, lP in izip(self.mixture_probs, logPs))
+            h = (p * T.exp(lP - max_logP) for p, lP in izip(ps, logPs))
+
             return max_logP + T.log(T.add(*h))
 
-        outputs = self.rng.choice((1,), a=[m['outputs'] for m in prob_models], p=self.mixture_probs)
-        references = dict(Merge)
+        outputs_idx = self.rng.choice(size=tuple(), a=len(prob_models), p=self.mixture_probs)
+        outputs_all = T.as_tensor_variable([m['outputs'] for m in prob_models])  # TODO for some reasons util.as_tensor_variable raises an error here
+        outputs = outputs_all[outputs_idx]
+
+        references = dict(merge)
         references['outputs'] = outputs
         references['logP'] = logP
-        references['parameters'] += [self.mixture_probs]
+        if 'parameters_psumto1' in references:
+            references['parameters_psumto1'] += [self.mixture_probs]
+        else:
+            references['parameters_psumto1'] = [self.mixture_probs]
         super(Mixture, self).__init__(**references)

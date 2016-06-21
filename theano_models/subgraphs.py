@@ -147,8 +147,21 @@ def subgraphs_as_outputs(wrapped, instance, args, kwargs):
     return wrapped(*map(subgraph_to_output, args), **fmap(subgraph_to_output, kwargs))
 
 
+@wrapt.decorator
+def subgraph(wrapped, instance, args, kwargs):
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+
+    Subgraph(dict(
+        inputs=remove_duplicates(deepflatten_keep_vars(args)),
+        outputs=outputs
+    ), wrapped.func_name)
+    return outputs
+
+
 @subgraphs_as_outputs
-def subgraph(*extra_inputs, **extra_references):
+def subgraph_extra(*extra_inputs, **extra_references):
     """ Decorates a function to be listed as Subgraph with optional extra inputs references """
     extra_inputs = deepflatten_keep_vars(list(extra_inputs) + list(extra_references.pop('inputs', [])))
 

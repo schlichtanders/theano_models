@@ -320,6 +320,8 @@ class Merge(Model):
         # deleting empty lists at the end does not make sense, as certain references need to stay []
         # (e.g. inputs, but probably also others)
         super(Merge, self).__init__(name=name, ignore=True, **merge)
+        # for convenience copy the dict entries too:
+        update(self.__dict__, subgraphs[0].__dict__, overwrite=False)
 
     def _gen_input_vars(self):
         for outer in self.copied_subgraphs:
@@ -363,6 +365,7 @@ class Reparameterize(Model):
 
     The underlying new_params are listed as parameters in the model, while the reparameterized params are outputs
     """
+    # TODO raise error/warning if parameters are already proxified
     def __init__(self, parameters, f, finv, givens={}):
         """
         Parameters
@@ -410,6 +413,7 @@ class Flatten(Model):
         key
         initial_inputs
         """
+        # TODO raise error/warning if parameters are already proxified
         try:
             if not isinstance(parameters, Sequence):
                 raise ValueError("`parameters` is not Sequence. Nothing to flat.")

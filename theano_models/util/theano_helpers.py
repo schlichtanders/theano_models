@@ -569,6 +569,12 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     -------
     tuple with entry being list of theano-expressions which denote the end of the respective inputsX-only subgraph
     """
+
+    # TODO try to apply Canonicalize Add/Prod optimizer first and than extract subparts of Add/Prod
+    # the reason is that if there is a node Add(....) then the current algorithm will only extract the inputs as
+    # part of the independent_subgraph. However it would be far more efficient to split the Add in those which are
+    # precomputable and those which are not
+
     outputs = convert(outputs, Sequence)
     for n in gen_nodes(outputs):
         for i in n.inputs:

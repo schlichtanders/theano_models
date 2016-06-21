@@ -134,7 +134,7 @@ def variational_postmap(model):
         loss_inputs=[RV] + model['inputs'],
         loss=-model['logP'](RV),
         loss_data=-model['loglikelihood'](RV),
-        loss_regularizer=1/model['n_data'] * model['kl_prior']
+        loss_regularizer=model['kl_prior']  # or model['kl_prior']/model['n_data'], but annealing loss is anyway used with specific weights
     )
 
 """
@@ -188,7 +188,7 @@ Numericalize Postmaps
 
 def flat_numericalize_postmap(model, flat_key="flat", mode=None,
                               annealing_combiner=None, mapreduce=None,
-                              save_compiled_functions=True, initial_inputs=None, adapt_init_params=lambda ps: ps,
+                              save_compiled_functions=True, initial_givens={}, adapt_init_params=lambda ps: ps,
                               pre_compile={'num_loss': True, 'num_jacobian': False, 'num_hessian': False},
                               batch_size=None,
                               profile=False):
@@ -208,9 +208,10 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
         extra kwargs for ``wrapper``
     save_compiled_functions : bool
         If false, functions are compiled on every postmap call anew. If true, they are hashed like in a usual DefaultDict
-    initial_inputs : list of values matching model['inputs']
-        for parameters which are not grounded, but depend on the input (only needed for initialization)
-        NON-OPTIONAL!! (because this hidden behaviour might easily lead to weird bugs)
+    initial_givens : dict TheanoVariable -> TheanoVariable
+        givens/replace dictionary for creating num_parameters
+        e.g. for parameters which are not grounded, but depend on a non-grounded input
+        (only needed for initialization)
     adapt_init_params : function numpy-vector -> numpy-vector
         for further control of initial parameters
     pre_compile : dictionary of pre_compile flags for the function compilation
@@ -230,9 +231,6 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
     assert (not isinstance(model[flat_key], Sequence)), "need single flat vector"
     if pre_compile == "build_batch_theano_graph" and batch_size is None:
         raise ValueError("Need batch_size for pre_compile_mode='build_batch_theano_graph'.")
-    if initial_inputs is None:
-        raise ValueError("Need ``initial_inputs`` to prevent subtle bugs. If really no inputs are needed, please supply"
-                         "empty list [] as kwarg.")
 
     parameters = model[flat_key]
     derivatives = {
@@ -313,7 +311,7 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
             if annealing_combiner:
                 return annealing_combiner(
                     function(derivatives[key]("loss_data"), pre_compile[key]),
-                    function(derivatives[key]("loss_regularizer"), pre_compile[key])
+                    theano_function([parameters], derivatives[key]("loss_regularizer"))
                 )
             else:
                 return function(derivatives[key]("loss"), pre_compile[key])
@@ -325,7 +323,8 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
             # for now we ignore this
             raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
 
-    num_parameters = theano.function(model['inputs'], parameters, on_unused_input='ignore')(*initial_inputs)
+    # num_parameters = theano.function(model['inputs'], parameters, on_unused_input='ignore')(*initial_inputs)
+    num_parameters = parameters.eval(initial_givens)
 
     dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=lambda key: numericalize(key) if key in derivatives else model[key],
@@ -341,32 +340,30 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
 class AnnealingCombiner(object):
     """ linearly combines functions with given weights, where weights change over time
     """
-    def __init__(self, weights=izip(repeat(1), repeat(1))):
+    def __init__(self, weights_data=repeat(1), weights_regularizer=repeat(1)):
         """
         Parameters
         ----------
-        weights : list of infinite generators
-            keyword-argument. Referring to respective weights, how to combine functions ``fs``
-            ``len(weights) == len(fs)`` must hold and weights must refer to INFINITE generators,
-            as looping makes no sense at all for annealing
-
-            defaults to expecting only two functions and adds them up
+        weights_data : infinite generators
+            consecutive weights for loss_data, defaults to constant 1
+        weights_regularizer : infinte generator
+            consecutive weights for loss_regularizer, defaults to constant 1
         """
-        self.weights = weights
+        self.weights_data = weights_data
+        self.weights_regularizer = weights_regularizer
 
-    def __call__(self, *functions):
+    def __call__(self, loss_data, loss_regularizer):
         """
         Parameters
         ----------
-        functions : list of functions
-            functions to be combined
+        loss_data: scalar function
+            should have signature loss_data(parameters, *loss_inputs)
+        loss_regularizer: scalar function which returns support + and *
+            should have signature loss_regularizer(parameters)
         """
-        assert len(self.weights) == len(functions), "there should be equal amount of weight lines and functions"
-        def annealed(*args):
-            s = 0
-            for f, w in izip(functions, self.weights):
-                s += next(w) * f(*args)
-            return s
+        def annealed(parameters, *loss_inputs):
+            return (next(self.weights_data) * loss_data(parameters, *loss_inputs)
+                    + next(self.weights_regularizer) * loss_regularizer(parameters))
         return annealed
 
 
