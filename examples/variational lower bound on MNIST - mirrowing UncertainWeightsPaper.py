@@ -40,6 +40,7 @@ __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":
     __file__ = replace_unc(__file__)
 __path__ = os.path.dirname(__file__)
+__parent__ = os.path.dirname(__path__)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -49,7 +50,7 @@ inputting_references.update(['to_be_randomized'])
 
 # Data
 # =====
-datafile = '../data/mnist.pkl.gz'
+datafile = os.path.join(__parent__, 'data', 'mnist.pkl.gz')
 
 with gzip.open(datafile,'rb') as f:                                                                        
     train_set, val_set, test_set = cPickle.load(f)                                                       
