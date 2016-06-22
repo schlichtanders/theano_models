@@ -360,8 +360,12 @@ class AnnealingCombiner(object):
             should have signature loss_data(parameters, *loss_inputs)
         loss_regularizer: scalar function which returns support + and *
             should have signature loss_regularizer(parameters)
+        no_annealing : bool
+            for extra executions of the functions which shall not advance the weights
         """
-        def annealed(parameters, *loss_inputs):
+        def annealed(parameters, *loss_inputs, **kwargs):
+            if kwargs.pop('no_annealing', False):
+                return loss_data(parameters, *loss_inputs) + loss_regularizer(parameters)
             return (next(self.weights_data) * loss_data(parameters, *loss_inputs)
                     + next(self.weights_regularizer) * loss_regularizer(parameters))
         return annealed

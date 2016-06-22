@@ -382,7 +382,7 @@ class Reparameterize(Model):
         )
         underlying_parameters = []
         try:
-            cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens)()
+            cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens, mode="FAST_COMPILE")()
         except MissingInputError as e:
             warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
             # clone is decisive as we otherwise get an infinite reference loop
@@ -419,7 +419,7 @@ class Flatten(Model):
                 raise ValueError("`parameters` is not Sequence. Nothing to flat.")
             flat_sym = T.concatenate([p.flatten() for p in parameters])
             shapes_sym = [p.shape for p in parameters]
-            _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens)()
+            _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens, mode="FAST_COMPILE")()
             flat_num, shapes_num = _f[0], _f[1:]
             flat = as_tensor_variable(flat_num)
             # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics

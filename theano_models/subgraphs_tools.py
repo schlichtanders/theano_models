@@ -4,8 +4,11 @@ from __future__ import print_function, division
 
 from collections import Sequence
 
+import theano
 from subgraphs import subgraph
 from itertools import izip
+
+from theano.gof.fg import MissingInputError
 from util import as_tensor_variable, clone
 import theano.tensor as T
 from schlichtanders.myfunctools import convert
@@ -124,7 +127,11 @@ reshape helpers
 def total_size(variables):
     """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
     variables = convert(variables, Sequence)
-    return T.add(*(clone(v).size for v in variables))
+    try:
+        sizes = theano.function([], [v.size for v in variables], mode="FAST_COMPILE")
+    except MissingInputError:
+        sizes = [clone(v).size for v in variables]
+    return T.add(*sizes)
 
 @subgraph
 def complex_reshape(vector, variables):
@@ -143,7 +150,13 @@ def complex_reshape(vector, variables):
     -------
         reshaped parts of the vector
     """
+    try:
+        shapes = theano.function([], [v.shape for v in variables], mode="FAST_COMPILE")
+    except MissingInputError:
+        shapes = [clone(v).shape for v in variables]
+
     i = 0
-    for v in variables:
-        yield vector[i:i+v.size].reshape(v.shape)
-        i += v.size
+    for shape in shapes:
+        size = np.prod(shape)
+        yield vector[i:i+size].reshape(shape)
+        i += size
