@@ -128,7 +128,7 @@ def total_size(variables):
     """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
     variables = convert(variables, Sequence)
     try:
-        sizes = theano.function([], [v.size for v in variables], mode="FAST_COMPILE")
+        sizes = theano.function([], [v.size for v in variables], mode="FAST_COMPILE")()
     except MissingInputError:
         sizes = [clone(v).size for v in variables]
     return T.add(*sizes)
@@ -151,7 +151,7 @@ def complex_reshape(vector, variables):
         reshaped parts of the vector
     """
     try:
-        shapes = theano.function([], [v.shape for v in variables], mode="FAST_COMPILE")
+        shapes = theano.function([], [v.shape for v in variables], mode="FAST_COMPILE")()
     except MissingInputError:
         shapes = [clone(v).shape for v in variables]
 
