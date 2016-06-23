@@ -132,7 +132,7 @@ class RandomHyper(Base):
             self.opt_momentum = random.choice([np.random.uniform(0, 0.01), np.random.uniform(0.8, 0.93)])
             self.opt_offset = 10 ** -np.random.uniform(3, 4)
         elif self.opt_identifier == "rmsprop":
-            self.opt_momentum = random.choice([np.random.uniform(0.002, 0.008), np.random.uniform(0.9, 1)]),
+            self.opt_momentum = random.choice([np.random.uniform(0.002, 0.008), np.random.uniform(0.9, 1)])
             self.opt_offset = np.random.uniform(0, 0.000045)
         self.opt_decay = np.random.uniform(0.78, 1)
         self.opt_step_rate = random.choice([1e-3, 1e-4, 1e-5])

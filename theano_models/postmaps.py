@@ -257,7 +257,7 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
             batch_outputs = T.add(*clones())
             f = theano_function([parameters] + batch_loss_inputs, batch_outputs)
 
-        elif pre_compile:
+        elif pre_compile and mapreduce is not None:
             # we need to handle randomness per sample
             # using model['noise'] is confusing when using another rng in the background, as then the randomness occurs
             # before and hence can go into ``sub``
@@ -283,15 +283,11 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
             fparam = theano_function([parameters], sub)
             foutput = theano_function(sub + model['loss_inputs'], outputs)
 
-            if mapreduce is not None:
-                def f(parameters, *loss_inputs):
-                    rparam = fparam(parameters)
-                    def h(*inner_loss_inputs):
-                        return foutput(*(rparam + list(inner_loss_inputs)))
-                    return mapreduce(h, *loss_inputs)
-            else:
-                def f(parameters, *loss_inputs):
-                    return foutput(*(fparam(parameters) + list(loss_inputs)))
+            def f(parameters, *loss_inputs):
+                rparam = fparam(parameters)
+                def h(*inner_loss_inputs):
+                    return foutput(*(rparam + list(inner_loss_inputs)))
+                return mapreduce(h, *loss_inputs)
             f.wrapped = fparam, foutput
 
         else:
