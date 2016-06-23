@@ -140,31 +140,23 @@ class Model(Subgraph):
             singleton = True
             new = [new]
 
-        # check args
-        # ==========
+        # replacement of other variables
+        # ==============================
 
         assert len(old) == len(new), "No substitution as length of `self[%s]` (%s) and `new`(%s) differ" % (
             key, len(old), len(new))
-        # if len(old) != len(new):
-        #     raise TypeError()
-        #     warnings.warn("No substitution as length of `self[key]` (%s) and `new`(%s) differ. Key is simply replaced." % (len(old), len(new)))
-        #     self.references[key] = new[0] if singleton else new
-        #     return
 
         # the only exception to substitution is if other variables are stored
         # which by default guarantee correct referencess (e.g. Functions)
         if all(not isinstance(o, theano.gof.Variable)
                and isinstance(n, self.ALLOWED_VALUETYPES)
                for o, n in zip(old, new)):
-            # info = "No substitution as `self[%s]` is not a theano.gof.Variable. Key is simply replaced." % key
-            # print(info)  # warnings.warn(info)
             self.references[key] = new[0] if singleton else new
             return
 
-        assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as length theano types differ"
-
-        # core substitution
-        # =================
+        # substitution of theano variables
+        # ================================
+        assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as theano types differ"
         for o, n in izip(old, new):
             proxify(o, n)
         # make sure that simply all cached compiled functions get destroyed, as references are no longer valid
@@ -321,7 +313,8 @@ class Merge(Model):
         # (e.g. inputs, but probably also others)
         super(Merge, self).__init__(name=name, ignore=True, **merge)
         # for convenience copy the dict entries too:
-        update(self.__dict__, subgraphs[0].__dict__, overwrite=False)
+        for s in subgraphs:
+            update(self.__dict__, s.__dict__, overwrite=False)
 
     def _gen_input_vars(self):
         for outer in self.copied_subgraphs:

@@ -176,7 +176,7 @@ class GaussianNoise(Model):
         """
         self.rng = rng or RNG
         if input is None:
-            input = T.dvector()
+            input = T.vector()
         if init_var is None:
             init_var = 1.0
             # TODO ensure that input does not get another shape!!!
@@ -248,7 +248,7 @@ class DiagGaussianNoise(Model):
         """
         self.rng = rng or RNG
         if input is None:
-            input = T.dvector()
+            input = T.vector()
         if init_var is None:
             init_var = T.ones(input.shape, dtype=config.floatX)
             # TODO ensure that input does not get another shape!!!

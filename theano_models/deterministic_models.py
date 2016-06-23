@@ -99,7 +99,7 @@ class AffineNonlinear(Model):
     def __init__(self, output_size, input=None, transfer='identity'):
         # input needs to be vector
         if input is None:
-            input = T.dvector()
+            input = T.vector()
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -126,7 +126,7 @@ class Mlp(Model):
     @subgraphs_as_outputs
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
-            input = T.dvector()
+            input = T.vector()
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
@@ -265,7 +265,7 @@ class PlanarTransform(InvertibleModel):
     @subgraphs_as_outputs
     def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
         if input is None:
-            input = T.dvector(name=U("z"))
+            input = T.vector(name=U("z"))
         if not hasattr(input, 'type') or input.type.broadcastable != (False,):
             raise ValueError("Need singleton input vector.")
 
