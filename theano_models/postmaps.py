@@ -8,13 +8,14 @@ from itertools import izip, repeat
 import numpy as np
 import theano
 import theano.tensor as T
+from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.mylists import as_list
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
 from schlichtanders.myfunctools import fmap
 from util import list_random_sources
 
-from subgraphs_tools import norm_distance, L2
+from base_tools import norm_distance, L2
 from theano.gof.fg import MissingInputError
 from theano_models.util.theano_helpers import independent_subgraphs
 from util import clone_renew_rng
@@ -86,12 +87,10 @@ def probabilistic_optimizer_postmap(model):
     -------
     IdentityDict over model with standard optimizer keys
     """
-    # virtual random variable
-    # (we cannot use model['RV'] itself, as the automatic gradients will get confused because model['RV'] is a complex sampler)
-    RV = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
+    rv = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
-        loss_inputs=[RV] + model['inputs'],
-        loss=-model['logP'](RV)
+        loss_inputs=[rv] + model['inputs'],
+        loss=-model['logP'](rv)
     )
 
 from theano.tensor import dvector
@@ -104,7 +103,7 @@ The following define such postmaps.
 """
 
 
-def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1):
+def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1, key_parameters="flat"):
     """ postmap for a standard deterministic model. Simply add this postmap to the model.
 
     Parameters
@@ -115,6 +114,8 @@ def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1):
         shall regularize parameters
     regularizer_scalar : scalar
         weight of loss_regularizer (loss_data is weighted with 1)
+    key_parameters : str
+        which reference should be counted as the parameters (and regularized)
 
     Returns
     -------
@@ -122,19 +123,30 @@ def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1):
     """
     return PassThroughDict(model,
         loss_data=model['loss'],
-        loss_regularizer=regularizer_norm(model['parameters']),
-        loss=model['loss'] + regularizer_scalar*regularizer_norm(model['parameters'])
+        loss_regularizer=regularizer_norm(model[key_parameters]),
+        loss=model['loss'] + regularizer_scalar*regularizer_norm(model[key_parameters])
     )
 
 
 def variational_postmap(model):
     """use this postmap INSTEAD of the standard probabilistic postmap"""
-    RV = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
+    rv = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
-        loss_inputs=[RV] + model['inputs'],
-        loss=-model['logP'](RV),
-        loss_data=-model['loglikelihood'](RV),
+        loss_inputs=[rv] + model['inputs'],
+        loss=-model['logP'](rv),
+        loss_data=-model['loglikelihood'](rv),
         loss_regularizer=model['kl_prior']  # or model['kl_prior']/model['n_data'], but annealing loss is anyway used with specific weights
+    )
+
+
+def normalizingflow_postmap(model):
+    """ use this postmap INSTEAD of the standard probabilistic postmap """
+    rv = model['outputs'].type("probabilistic_target")
+    return PassThroughDict(model,
+        loss_inputs=[rv] + model['inputs'],
+        loss=-model['logP'](rv),
+        loss_data=-model['loglikelihood'](rv) - model['logprior'],
+        loss_regularizer=model['logposterior'],
     )
 
 """
@@ -336,7 +348,7 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
 class AnnealingCombiner(object):
     """ linearly combines functions with given weights, where weights change over time
     """
-    def __init__(self, weights_data=repeat(1), weights_regularizer=repeat(1)):
+    def __init__(self, weights_data=repeat(1), weights_regularizer=repeat(1), scale_by_len=("data", "regularizer")):
         """
         Parameters
         ----------
@@ -347,6 +359,7 @@ class AnnealingCombiner(object):
         """
         self.weights_data = weights_data
         self.weights_regularizer = weights_regularizer
+        self.scale_by_len = scale_by_len
 
     def __call__(self, loss_data, loss_regularizer):
         """
@@ -360,10 +373,17 @@ class AnnealingCombiner(object):
             for extra executions of the functions which shall not advance the weights
         """
         def annealed(parameters, *loss_inputs, **kwargs):
+            length = {'data': 1, 'regularizer': 1}
+            with ignored(TypeError):
+                for key in self.scale_by_len:
+                    length[key] = len(loss_inputs[0])
+
             if kwargs.pop('no_annealing', False):
-                return loss_data(parameters, *loss_inputs) + loss_regularizer(parameters)
-            return (next(self.weights_data) * loss_data(parameters, *loss_inputs)
-                    + next(self.weights_regularizer) * loss_regularizer(parameters))
+                return loss_data(parameters, *loss_inputs)/length['data'] + loss_regularizer(parameters)/length['regularizer']
+
+            ld = next(self.weights_data) * loss_data(parameters, *loss_inputs) / length['data']
+            lr = next(self.weights_regularizer) * loss_regularizer(parameters) / length['regularizer']
+            return ld + lr
         return annealed
 
 

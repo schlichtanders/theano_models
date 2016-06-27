@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 
+from numbers import Number
+
 import numpy as np
 
 import theano
@@ -16,15 +18,10 @@ from breze.arch.component import transfer as _transfer
 
 from collections import Sequence
 
-from subgraphs import subgraphs_as_outputs, subgraph_to_output, inputting_references, outputting_references, Subgraph
-from subgraphs_tools import softplus
-from base import Model, merge_key
-from util import as_tensor_variable, clone, U
+from base import models_as_outputs, model_to_output, inputting_references, outputting_references, Model
+from base_tools import softplus
+from util import as_tensor_variable, clone, U, merge_key
 from placeholders import Placeholder
-import wrapt
-import types
-
-from schlichtanders.mylists import deepflatten
 
 
 
@@ -95,7 +92,7 @@ MLP
 
 class AffineNonlinear(Model):
 
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, output_size, input=None, transfer='identity'):
         # input needs to be vector
         if input is None:
@@ -123,7 +120,7 @@ class AffineNonlinear(Model):
 
 class Mlp(Model):
 
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
             input = T.vector()
@@ -179,8 +176,8 @@ class InvertibleModel(Model):
             (alternatively you can improve theanos optimizers)
         """
         # we cannot use ``subgraphs_as_outputs`` because inverse needs to stay Model
-        inputs = subgraph_to_output(inputs)
-        outputs = subgraph_to_output(outputs)
+        inputs = model_to_output(inputs)
+        outputs = model_to_output(outputs)
         if norm_det is None:
             # assume single input to single output # TODO generalize to multiple outputs?
             jac = gradient.jacobian(outputs, inputs[0])
@@ -200,7 +197,7 @@ class InvertibleModel(Model):
             inverse.f_inputs = inputs
             inverse.f_outputs = outputs
 
-        if hasattr(inverse, '__call__') and not isinstance(inverse, (Subgraph, theano.OpFromGraph)):
+        if hasattr(inverse, '__call__') and not isinstance(inverse, (Model, theano.OpFromGraph)):
             # TODO currently only single output is supported
             inverse_inputs = [outputs.type()]
             inverse_outputs = inverse(*inverse_inputs)
@@ -214,66 +211,57 @@ class InvertibleModel(Model):
             )
         self.inverse = inverse
         InvertibleModel.INVERTIBLE_MODELS.append(self)
-        self._is_identity = False
+        self.is_identity = False
 
-    @property
-    def is_identity(self):
-        return self._is_identity
-
-    @is_identity.setter
-    def is_identity(self, val):
-        self._is_identity = val
-        self.inverse._is_identity = val
-
-    def reduce_identity(self):
+    def check_identity(self):
         change = False
         # already identity function
         # assumes singleton input. Note, using `is` gives error as `proxy is not wrapped` but `proxy == wrapped`
-        if self['inputs'][0] == self['outputs']:
-            self.is_identity = True
-        # f(finv(x)) = x
-        elif self['inputs'][0] == self.inverse['outputs']:
+        if self.is_identity and self['inputs'][0] != self.inverse['outputs']:
+            raise RuntimeError("Detected that reduced Inverse function was remapped to again work as normal Inverse."
+                               "This kind of reversing is not supported yet unfortunately.")
+            # TODO: do reversing
+            self.is_identity = False
+            change = True
+        # f(finv(x)) = x  # reduce this, as f(finv(x)) is always used as this in the graph
+        # by uniqueness of this model, there can either by f(finv(x)) or finv(f(x)), bot NOT both, (it would result in infinite recursion)
+        elif not self.is_identity and not self.inverse.is_identity and self['inputs'][0] == self.inverse['outputs']:
             # make identity function:
             self['outputs'] = self.inverse['inputs']
-            self['inputs'] = self.inverse['inputs']  # implies self.inverse['outputs] = self.inverse['inputs']
+            # don't change the self['inputs'] as this would change finv which might still be used somewhere else!!,
             self.is_identity = True
             change = True
-        # finv(f(x)) = x
-        elif self.inverse['inputs'][0] == self['outputs']:
-            # make identity function:clone,
-            self.inverse['outputs'] = self['inputs']
-            self.inverse['inputs'] = self['inputs']  # implies self['outputs] = self['inputs']
-            self.is_identity = True
-            change = True
-        # no identity
-        else:
-            self.is_identity = False
+        # finv(f(x)) = x  # this should NOT be reduced, as f(x) can be used elsewhere in the graph
         return change
 
     @staticmethod
-    def reduce_all_identities():
+    def check_all_identities():
         any_change = True  # do while
         while any_change:
             any_change = False
             for im in InvertibleModel.INVERTIBLE_MODELS:
-                any_change |= im.reduce_identity()
+                any_change |= im.check_identity()
 
 
 class PlanarTransform(InvertibleModel):
     """ invertable transformation, unfortunately without symbolic inverse """
 
-    @subgraphs_as_outputs
-    def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, R_to_Rplus=softplus):
+    @models_as_outputs
+    def __init__(self, input=None, h=T.tanh, init_w=None, init__u=None, init_b=0, R_to_Rplus=softplus):
+        if isinstance(input, Sequence):
+            raise ValueError("Need single input variable.")
         if input is None:
-            input = T.vector(name=U("z"))
-        if not hasattr(input, 'type') or input.type.broadcastable != (False,):
-            raise ValueError("Need singleton input vector.")
+            input = T.vector()
+        else:
+            input = as_tensor_variable(input)
 
-        self.b = as_tensor_variable(0, U("b"))
-        self.w = T.ones(input.shape) if init_w is None else as_tensor_variable(init_w)
-        self.w.name = U("w")
-        self._u = T.zeros(input.shape) if init__u is None else as_tensor_variable(init__u)
-        self._u.name = U("_u")
+        self.b = as_tensor_variable(init_b, U("b"))
+        if init_w is None:
+            init_w = T.ones(input.shape)
+        self.w = as_tensor_variable(init_w, "w")
+        if init__u is None:
+            init__u = T.ones(input.shape)
+        self._u = as_tensor_variable(init__u, U("_u"))
         # this seems not reversable that easily:
         self.u = self._u + (R_to_Rplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
         # HINT: this softplus might in fact refer to a simple positive parameter, however the formula seems more complex
@@ -297,7 +285,7 @@ class PlanarTransform(InvertibleModel):
 
 class RadialTransform(InvertibleModel):
 
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, input=None, init_alpha=1, init_beta=1, init_z0=None):
         """
 
@@ -308,10 +296,12 @@ class RadialTransform(InvertibleModel):
         init_beta : float > 0
         """
         # TODO raise error for non-valid init_beta or init_alpha!
+        if isinstance(input, Sequence):
+            raise ValueError("Need single input variable.")
         if input is None:
-            input = T.dvector(name=U("z"))
-        if not hasattr(input, 'type') or input.type.broadcastable != (False,):
-            raise ValueError("Need singleton input vector.")
+            input = T.vector()
+        else:
+            input = as_tensor_variable(input)
 
         self.alpha = as_tensor_variable(init_alpha, U("alpha"))
         self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, U("beta+alpha"))
@@ -342,5 +332,36 @@ class RadialTransform(InvertibleModel):
             parameters=[self.z0],
             parameters_positive=[self.alpha, self.beta_plus_alpha],  # Constraint for invertibility
             norm_det=norm_det,
-            inverse_outputs=inverse,
+            inverse=inverse,
+        )
+
+
+class LocScaleTransform(InvertibleModel):
+    @models_as_outputs
+    def __init__(self, input=None, init_loc=None, init_scale=1, independent_scale=False):
+        if input is None:
+            input = T.vector()
+        else:
+            input = as_tensor_variable(input)
+
+        if init_loc is None:
+            init_loc = T.zeros(input.shape)
+        self.loc = as_tensor_variable(init_loc, U("loc"))
+
+        if not independent_scale and not isinstance(init_scale, Number):
+            raise ValueError("if not indepent scale, only a scalar variance is needed")
+        if independent_scale and isinstance(init_scale, Number):
+            init_scale = T.ones(input.shape) * init_scale
+        self.scale = as_tensor_variable(init_scale, U("scale"))
+
+        def inverse(y):
+            return (y - self.loc)/self.scale
+
+        super(LocScaleTransform, self).__init__(
+            inputs=[input],
+            outputs=self.loc + self.scale*input,
+            parameters=[self.loc],
+            parameters_positive=[self.scale],
+            inverse=inverse,
+            norm_det=self.scale.prod() if independent_scale else self.scale**input.size
         )

@@ -7,8 +7,10 @@ from collections import Sequence, MutableMapping, Mapping
 from copy import copy
 from itertools import izip
 from pprint import pformat
+
+import itertools
 import wrapt
-from functools import partial
+from functools import partial, wraps
 
 import numpy as np
 import theano
@@ -19,20 +21,15 @@ from theano import gof, config
 from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update, ModifyDict
-from schlichtanders.mylists import sequencefy, remove_duplicates
+from schlichtanders.mylists import sequencefy, remove_duplicates, as_list
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap, convert
 
-from util import clone, as_tensor_variable, deepflatten_keep_vars, U
-from util.theano_helpers import is_clonable, get_inputs, clone_all
+from util import clone, as_tensor_variable, shallowflatten_keep_vars, deepflatten_keep_vars, U, reset_eval
+from util.theano_helpers import is_clonable, get_graph_inputs, clone_all, is_pseudo_constant
 import types
 
-from subgraphs import subgraph_to_output, subgraphs_as_outputs, Subgraph, inputting_references, outputting_references
-from subgraphs_tools import complex_reshape
-
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
-
-inputting_references.add("flat")
 
 theano.function
 theano.compile.pfunc
@@ -42,15 +39,69 @@ theano.tensor.log
 theano.gof.fg
 from theano.tensor.shared_randomstreams import RandomStreams
 
+
 """
-Subgraph with substitution == Model
-===================================
-This is the core class of the whole module. It simply overwrites dict assigment with a substitution mechanism to
-enable interactive chaining of models.
+Prelimenaries
+=============
+Important helpers/decorators in order to make setting up things easy.
 """
 
 
-class Model(Subgraph):
+def model_to_output(m):
+    if isinstance(m, Sequence) and any(isinstance(n, Model) for n in m):
+        return shallowflatten_keep_vars(map(model_to_output, m))
+    elif isinstance(m, Model):
+        return m['outputs']
+    else:
+        return m
+
+
+@wrapt.decorator
+def models_as_outputs(wrapped, instance, args, kwargs):
+    return wrapped(*map(model_to_output, args), **fmap(model_to_output, kwargs))
+
+
+
+"""
+Model / Merge
+=============
+These are the two core classes of the whole module. Model simply overwrites dict assigment with a substitution mechanism
+to enable interactive chaining of models. Merge is the standard class for combining Models in a clean and straighforward
+default way.
+
+First some general convention about the keys used within a Model:
+"""
+
+inputting_references = set(['inputs', 'flat'])
+outputting_references = set(['outputs'])
+
+
+def get_inputting_references(m):
+    """ returns list of variables within inputting_references
+    Parameters
+    ----------
+    m : Model
+    """
+    ret = []
+    for r in deepflatten_keep_vars(m[k] for k in m if k in inputting_references):
+        if r.name is None and (is_pseudo_constant(r)
+                               or isinstance(r, theano.gof.Constant)
+                               or isinstance(r, theano.tensor.sharedvar.TensorSharedVariable)):
+            continue
+        ret.append(r)
+    return ret
+
+
+def get_outputting_references(m):
+    """ returns list of variables within outputting_references
+    Parameters
+    ----------
+    m : Model
+    """
+    return deepflatten_keep_vars(m[k] for k in m if k in outputting_references)
+
+
+class Model(MutableMapping):
     """
     This structure is intended to be a view onto a TheanoGraph with extra references to:
         - either theano variables directly,
@@ -66,8 +117,10 @@ class Model(Subgraph):
 
     ALLOWED_VALUETYPES = gof.Variable, types.FunctionType
 
-    @subgraphs_as_outputs
-    def __init__(self, outputs, inputs=None, name=None, **further_references):
+    all_models = []
+
+    @models_as_outputs
+    def __init__(self, outputs, inputs=None, name=None, ignore=False, no_unique_name=False, **further_references):
         """
         Constructs a Model by directly referencing outputs and inputs, and further_references
         It does essentially nothing, but gives them a summarizing class interface.
@@ -79,18 +132,55 @@ class Model(Subgraph):
         inputs: list of theano expressions (or exceptionally also single expression)
             functional like inputs
             if not given explicitly ``inputs`` get set to ``theano_models.util.theano_helpers.get_inputs(outputs)``
+        name : str or None
+            like Subgraph name parameter
+        ignore : bool
+            like Subgraph ignore parameter
         further_references: kwargs of theano expressions, or lists thereof
             possible further references
         """
+        # references
+        # ----------
         if inputs is None:
-            inputs = get_inputs(outputs)
+            inputs = get_graph_inputs(outputs)
         inputs = convert(inputs, Sequence)
 
-        super(Model, self).__init__(name=name,
-            outputs=outputs,
-            inputs=inputs,
-            **further_references
-        )
+        self.references = {
+            'inputs': inputs,
+            'outputs': outputs
+        }
+        self.references.update(**further_references)
+
+        # names
+        # -----
+        if name is None:
+            name = self.__class__.__name__
+        self.name = name if no_unique_name else U(name)
+
+        # set names of references if not done so already
+        for k, v in self.iteritems():
+            if isinstance(v, Sequence):
+                for i, x in enumerate(v):
+                    if hasattr(x, 'name') and x.name is None:
+                        x.name = "%s.%s.%i" % (self.name, k, i)
+            else:
+                if hasattr(v, 'name') and v.name is None:
+                    v.name = "%s.%s" % (self.name, k)
+
+        if not ignore:
+            Model.all_models.append(self)
+
+    def __copy__(self):
+        return self.copy()
+
+    def copy(self, ignore=True):
+        cls = self.__class__
+        cp = cls.__new__(cls)
+        cp.references = {k: v[:] if isinstance(v, Sequence) else v for k, v in self.references.iteritems()}
+        cp.name = self.name
+        if not ignore:
+            Model.all_models.append(cp)
+        return cp
 
     def function(self, *args, **kwargs):
         if 'on_unused_input' not in kwargs:
@@ -108,9 +198,10 @@ class Model(Subgraph):
         # Preprocessing
         # =============
         old = self[key]
-        singleton = False
+        old_singleton = not isinstance(old, Sequence)
         old = convert(old, Sequence)
 
+        new_singleton = False
         if isinstance(new, Model):
             new = new['outputs']
         elif not isinstance(new, Sequence):
@@ -129,15 +220,19 @@ class Model(Subgraph):
                 else:
                     _new.append(as_tensor_variable(n))
             new = _new
-        # no Sequence, try FANCY REWRITING
-        elif (hasattr(new, 'broadcastable') and new.broadcastable == (False,)
-              and all(is_clonable(o) for o in old)):  # vector type of arbitrary dtype
-            print("fancy reshaping")
-            old_cp = [clone(o) for o in
-                      old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
-            new = complex_reshape(new, old_cp)  # list(...) not needed because of @track_as_helper decorator
+        elif old_singleton:
+            new_singleton = True
+            new = [new]
+        # DEPRECATED fancy rewriting: use Flatten instead explicitly
+        # # no Sequence, no single element, try FANCY REWRITING
+        # elif (hasattr(new, 'broadcastable') and new.broadcastable == (False,)
+        #       and all(is_clonable(o) for o in old)):  # vector type of arbitrary dtype
+        #     print("fancy reshaping")
+        #     old_cp = [clone(o) for o in
+        #               old]  # we need copy as new gets proxified later on, single copy satifies as this is not recursive
+        #     new = complex_reshape(new, old_cp)  # list(...) not needed because of @track_as_helper decorator
         else:
-            singleton = True
+            new_singleton = True
             new = [new]
 
         # replacement of other variables
@@ -151,18 +246,39 @@ class Model(Subgraph):
         if all(not isinstance(o, theano.gof.Variable)
                and isinstance(n, self.ALLOWED_VALUETYPES)
                for o, n in zip(old, new)):
-            self.references[key] = new[0] if singleton else new
+            self.references[key] = new[0] if new_singleton else new
             return
 
         # substitution of theano variables
         # ================================
-        assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as theano types differ"
+        # reshape constant dimension:
+        def len_min_sum(iterable):
+            return len(iterable) - sum(iterable)
+        def new_reshaped():
+            for o, n in izip(old, new):
+                if (o.broadcastable != n.broadcastable
+                        and len_min_sum(o.broadcastable) == len_min_sum(n.broadcastable)):  # counts False
+                    idx = itertools.count()
+                    def broadcast_pattern():
+                        for b in o.broadcastable:
+                            if b:
+                                yield 'x'
+                            else:
+                                yield next(idx)
+                    yield n.squeeze().dimshuffle(*broadcast_pattern())
+                else:
+                    yield n
+
+        assert all(o.type == n.type for o, n in izip(old, new_reshaped())), "No substitution as theano types differ"
         for o, n in izip(old, new):
             proxify(o, n)
         # make sure that simply all cached compiled functions get destroyed, as references are no longer valid
         reset_eval(self)
 
-    @subgraphs_as_outputs
+    # dict interface
+    # --------------
+
+    @models_as_outputs
     def __setitem__(self, key, value):
         """ convenience access to substitute_key """
         if key in self:
@@ -173,11 +289,35 @@ class Model(Subgraph):
                     "The type of the given value is not supported. You may change ``Model.ALLOWED_VALUETYPES`` if you know what your doing.")
             self.references[key] = value
 
-    def add_new(self, key, value):
-        """ for writing self-explanatory code """
-        if key in self:
-            raise ValueError("Key %s is already part of the model." % key)
-        self.references[key] = value
+    def __getitem__(self, item):
+        return self.references[item]
+
+    def __delitem__(self, key):
+        # TODO should delete be allowed? seems like producing bugs in that references can be deleted and added anew, e.g. with different lengths
+        del self.references[key]
+
+    def __iter__(self):
+        return iter(self.references)
+
+    def __len__(self):
+        return len(self.references)
+
+    # hashable interface
+    # ------------------
+
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return hash(self) == hash(other)
+
+    # visualization interface
+    # -----------------------
+
+    def __str__(self):
+        return self.name + " " + pformat(dict(self), indent=2)
+
+    __repr__ = __str__
 
     # #deprecated as the call might once work like in theano.OpFromGraph
     # def __call__(self, *inputs):
@@ -196,39 +336,6 @@ class Model(Subgraph):
     #     return self['outputs']
 
 
-
-"""
-Caution with eval()
--------------------
-"""
-
-
-def reset_eval(var):
-    """ this empties the caches of compiled functions
-
-    Parameters
-    ----------
-    var : Model, Sequence, or theano Variable
-        to be reset (maybe recursively)
-    """
-    if isinstance(var, Model):
-        for key in var:
-            reset_eval(var[key])
-    elif isinstance(var, Sequence):
-        for subvar in var:
-            reset_eval(subvar)
-    elif isinstance(var, gof.Variable):
-        if hasattr(var, '_fn_cache'):
-            del var._fn_cache
-    # everything else does not need to be reset
-
-
-"""
-Merge helpers
-=============
-"""
-
-
 class Merge(Model):
     """ this class is used for combining references of several models in a consistent manner """
 
@@ -236,34 +343,48 @@ class Merge(Model):
         """
         Parameters
         ----------
-        subgraphs : Subgraph
+        subgraphs : Model or dict of references
             to be combined consistently
         name : str
             like in Model
         convert_singletons_to_list : Bool, default False
             if True then all single variables are wrapped into lists if combined with other subgraphs
             if False then the first reference is taken
+        keep_references : list of str or "all"/None
+            list of references which shall be preserved, usually `inputting_references` or similar. "all"/None will
+            retain all references
+            This only applies to *subgraphs, NOT to **other_references
+        ignore_references : list of str or None
+            opposite of keep_references
         other_references : None, str, gof.Variables, list of gof.Variables
             if is None, then the respective key is deleted and replaced by empty list []
             if keywordarg="str" then the reference is understood as a renaming  new_key=old_key
             other references are simply combined with old references
         """
         convert_singletons_to_list = other_references.pop("convert_singletons_to_list", False)
+        keep_references = other_references.pop("keep_references", None)
+        ignore_references = other_references.pop("ignore_references", None)
+        if keep_references == "all":
+            keep_references = None
         name = other_references.pop("name", None)
+        ignore = other_references.pop("ignore", True)
         self.original_subgraphs = subgraphs
         self.copied_subgraphs = map(copy, subgraphs)
 
         # remove all nested references:
         input_vars = self._gen_input_vars()
         with until_stopped:
-            ivar = input_vars.next()
+            ivar, outer = input_vars.next()
             while True:
-                matched = self._delete_corresponding_output(ivar)
-                ivar = input_vars.send(matched)
-
+                matched = self._delete_corresponding_output(ivar, outer)
+                ivar, outer = input_vars.send(matched)
         # merge subgraphs:
         merge = {}
         subgraph_references = set(self.copied_subgraphs[0]).union(*self.copied_subgraphs[1:])
+        if keep_references is not None:
+            subgraph_references = subgraph_references.intersection(keep_references)
+        if ignore_references is not None:
+            subgraph_references = subgraph_references.difference(ignore_references)
 
         for key in subgraph_references:
             for sg in self.copied_subgraphs:
@@ -283,8 +404,9 @@ class Merge(Model):
 
         for key in other_references:
             if other_references[key] is None:
-                del merge[key]
-                merge[key] = []
+                with ignored(KeyError):
+                    del merge[key]
+                    merge[key] = []
 
             elif isinstance(other_references[key], basestring):
                 new_key = other_references[key]
@@ -309,9 +431,14 @@ class Merge(Model):
                     merge[key] = convert(merge[key], list) + convert(other_references[key], list)
                 # else nothing happens as subgraphs come before other_references (by syntax)
 
+        # remove all duplicates if any
+        for v in merge.values():
+            if isinstance(v, Sequence):
+                remove_duplicates(v)  # remove_duplicates works inplace
+
         # deleting empty lists at the end does not make sense, as certain references need to stay []
         # (e.g. inputs, but probably also others)
-        super(Merge, self).__init__(name=name, ignore=True, **merge)
+        super(Merge, self).__init__(name=name, ignore=ignore, **merge)
         # for convenience copy the dict entries too:
         for s in subgraphs:
             update(self.__dict__, s.__dict__, overwrite=False)
@@ -323,20 +450,22 @@ class Merge(Model):
                     idx = 0
                     while idx < len(outer[iref]):
                         ivar = outer[iref][idx]
-                        matched = yield ivar
+                        matched = yield ivar, outer
                         if matched:
                             del outer[iref][idx]
                             # keep same idx, as current idx was deleted
                         else:
                             idx += 1
                 else:
-                    matched = yield outer[iref]
+                    matched = yield outer[iref], outer
                     if matched:
                         del outer[iref]
 
-    def _delete_corresponding_output(self, ivar):
+    def _delete_corresponding_output(self, ivar, outer):
         """ returns whether a matching output was found and deleted """
         for inner in self.copied_subgraphs:
+            if inner == outer:
+                continue  # don't look within the same graph
             for oref in set(inner).intersection(outputting_references):
                 if isinstance(inner[oref], list):
                     with ignored(ValueError):  # throws ValueError if ivar not in list
@@ -347,6 +476,14 @@ class Merge(Model):
                         del inner[oref]
                         return True
         return False
+
+
+"""
+Core Models
+===========
+Models which are used everywhere and always, hence belong to the core. At the moment, these encompass mainly
+models used for reparameterization purposes.
+"""
 
 
 class Reparameterize(Model):
@@ -382,9 +519,9 @@ class Reparameterize(Model):
             cp_parameters = map(clone, parameters)
 
         for p, cp in izip(parameters, cp_parameters):
-            underlying_p = subgraph_to_output(finv(cp))
+            underlying_p = model_to_output(finv(cp))
             underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
-            new_p = subgraph_to_output(f(underlying_p))
+            new_p = model_to_output(f(underlying_p))
             new_p.name = (p.name or str(p)) + "_reparam"
             proxify(p, new_p)
             underlying_parameters.append(underlying_p)
@@ -462,10 +599,54 @@ class Flatten(Model):
         })
 
 
-def merge_key(models, key="parameters"):
-    """ simply combines all model[key] values for model in models """
-    parameters = []
-    for g in models:
-        if key in g:
-            parameters += g[key]
-    return parameters
+"""
+Core Decorators
+===============
+to easily track functions as Models (e.g. for visualization)
+"""
+
+@wrapt.decorator
+def track_model(wrapped, instance, args, kwargs):
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+
+    Model(
+        name=wrapped.func_name,
+        inputs=remove_duplicates(deepflatten_keep_vars(args)),
+        outputs=outputs
+    )
+    return outputs
+
+
+def track_merge(*merge_subgraphs, **merge_kwargs):
+    """ Decorates a function to be listed as a Model
+    Thereby the Model defined by the given Merge parameters is adapted by the function {inputs:..., outpupts:...}
+    dictionary to create and list a new Model
+
+    Parameters
+    ----------
+    see Merge
+    """
+    ignore = merge_kwargs.pop('ignore', False)
+    def decorator(wrapped):
+        name = merge_kwargs.pop('name', None)
+        if name is None:
+            try:
+                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
+            except StopIteration:
+                name = ""
+            name += wrapped.func_name
+
+        @wraps(wrapped)
+        def wrapper(*args, **kwargs):
+            outputs = wrapped(*args, **kwargs)
+            if isinstance(outputs, types.GeneratorType):
+                outputs = list(outputs)
+            Merge(*merge_subgraphs,
+                  name=name, ignore=ignore,
+                  inputs=list(args), outputs=outputs,
+                  **merge_kwargs)
+            return outputs
+        return wrapper
+    return decorator

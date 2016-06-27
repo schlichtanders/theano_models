@@ -338,7 +338,7 @@ def gen_variables(initial_variables, yield_on=lambda v: True, stop_on=lambda v: 
 #             yield __v
 
 
-def get_inputs(variables):
+def get_graph_inputs(variables):
     def leaf(v):
         return v.owner is None or is_pseudo_constant(v)
     return list(gen_variables(variables, yield_on=leaf, stop_on=leaf))

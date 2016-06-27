@@ -1,20 +1,26 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import division
+
+from itertools import izip
+
 import theano
+from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myfunctools import convert
-from schlichtanders.mylists import return_list
+from schlichtanders.mylists import return_list, as_list
 from theano import gof
 import theano.tensor as T
-from subgraphs import Subgraph, subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
-from base import Model, Merge
+from base import Model, Merge, track_merge, models_as_outputs, inputting_references, outputting_references
 from collections import Sequence
+
+from base_tools import total_size
+from util import as_tensor_variable, shallowflatten_keep_vars
+from numbers import Number
+
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-from theano.scalar.basic import Abs
-
-outputting_references.update(['loglikelihood', 'kl_prior'])
-inputting_references.update(['n_data'])
+outputting_references.update(['loglikelihood', 'kl_prior', 'norm_dets'])
+inputting_references.update(['n_data', 'extra_inputs'])
 
 """
 Composing Deterministic and Probabilistic Models
@@ -44,8 +50,8 @@ def normalizing_flow(invertible_model, base_prob_model):
     invertible_model['inputs'] = base_prob_model
     merge = Merge(invertible_model, base_prob_model, name="normalized_flow")
 
-    @subgraphs_as_outputs
-    @subgraph_modify(merge)
+    @models_as_outputs
+    @track_merge(merge, ignore_references=outputting_references, extra_inputs=[invertible_model['norm_det']])
     def logP(y):
         invertible_model.inverse['inputs'] = y
         return base_prob_model['logP'](invertible_model.inverse['outputs']) - T.log(abs(invertible_model['norm_det']))  # equation (5)
@@ -125,7 +131,8 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
         if True, the prior is also merged into the final model
         this is usually not wanted, as there are reasons that the prior parameters are learned via Hyperparametersearch.
     """
-    subgraphs = [Y]
+    if randomize_key not in inputting_references:
+        raise ValueError("Only an inputting reference makes sense for `randomize_key`.")
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
     if 'loglikelihood' in Y:
@@ -140,10 +147,6 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
     Xs = convert(Xs, list)
     priors = convert(priors, list)
 
-    subgraphs += Xs
-    if merge_priors:
-        subgraphs += priors
-
     # if kl is not given we default to the approximation of the Variational Lower Bound found in equation (2) of the
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"
     # [if we would be able to do math on Theano variables (or use sympy variables for everything)
@@ -153,7 +156,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
         # the overall log_prior_distr or log_posterior_distr can be computed as a sum of the single log
         # Note, that the variational lower bound requires to substitute RV from X into every distribution function
         def log_prior_distr():
-            for prior, X in zip(priors, Xs):
+            for prior, X in izip(priors, Xs):
                 if isinstance(prior, Model):
                     prior = prior['logP']  # merge must be done outside
                 # else prior is already a logP function
@@ -163,10 +166,13 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
             for X in Xs:
                 yield X['logP'](X)
 
-        kl_prior = T.add(*log_posterior_distr()) - T.add(*log_prior_distr())
-        kl_prior.name = "kl_prior"
+        Y['logposterior'] = T.add(*log_posterior_distr())
+        Y['logprior'] = T.add(*log_prior_distr())
+        kl_prior = Y['logposterior'] - Y['logprior']
+        # kl_prior.name = "kl_prior"  # automatically given
+        extra_inputs = shallowflatten_keep_vars(x['outputs'] for x in Xs)
     else:
-        subgraphs.append(kl_prior)
+        extra_inputs = [kl_prior]
 
     # core variational bayes
     # ----------------------
@@ -178,12 +184,16 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
 
     Y[randomize_key] = Xs  # make original parameters random
 
-    merge = Merge(*(sg for sg in subgraphs if isinstance(sg, Subgraph)), name="variational_lower_bound")
+    subgraphs = [Y]
+    subgraphs += Xs
+    subgraphs += priors
 
+    merge = Merge(*(sg for sg in subgraphs if isinstance(sg, Model)),
+                  name="variational_lower_bound")
 
     # the variational lower bound as approximation of logP:
-    @subgraphs_as_outputs
-    @subgraph_modify(merge)
+    @models_as_outputs
+    @track_merge(merge, ignore_references=outputting_references, extra_inputs=extra_inputs)
     def logP(rv):
         return Y['loglikelihood'](rv) - T.inv(Y['n_data']) * kl_prior
 
@@ -192,3 +202,13 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
     merge['logP'] = logP
     return merge
 
+
+
+"""
+adaptations of graphs
+=====================
+"""
+
+def fix_params(model):
+    fix = {p: None for p in inputting_references if "parameter" in p}
+    return Merge(model, name=model.name+"_fixed", **fix)

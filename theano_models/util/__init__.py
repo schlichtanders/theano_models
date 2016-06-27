@@ -3,7 +3,7 @@
 from itertools import izip
 import theano.tensor as T
 from theano_helpers import (as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams,
-                            get_inputs, get_profile, clone_renew_rng, list_random_sources)
+                            get_graph_inputs, get_profile, clone_renew_rng, list_random_sources)
 
 from theano import gof
 from collections import Sequence, MutableMapping
@@ -18,6 +18,10 @@ from copy import copy
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+"""
+flatten variable lists
+----------------------
+"""
 
 @return_list
 def shallowflatten_keep_vars(th):
@@ -42,6 +46,11 @@ def deepflatten_keep_vars_(th):
                 yield i
 
 
+"""
+naming
+------
+"""
+
 # starting counting at 1 seems much more intuitive here
 _start_idx = 1
 _running_numbers = defaultdict(lambda: it.count(_start_idx))
@@ -56,3 +65,42 @@ def get_unique_name(name, ommit_first_index=True):
 
 #: convenience shortcut
 U = get_unique_name
+
+"""
+merge
+-----
+"""
+
+def merge_key(models, key="parameters"):
+    """ simply combines all model[key] values for model in models """
+    parameters = []
+    for g in models:
+        if key in g:
+            parameters += g[key]
+    return parameters
+
+
+"""
+Caution with eval()
+-------------------
+"""
+
+
+def reset_eval(var):
+    """ this empties the caches of compiled functions
+
+    Parameters
+    ----------
+    var : Model, Sequence, or theano Variable
+        to be reset (maybe recursively)
+    """
+    if isinstance(var, MutableMapping):
+        for key in var:
+            reset_eval(var[key])
+    elif isinstance(var, Sequence):
+        for subvar in var:
+            reset_eval(subvar)
+    elif isinstance(var, gof.Variable):
+        if hasattr(var, '_fn_cache'):
+            del var._fn_cache
+    # everything else does not need to be reset

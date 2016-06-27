@@ -26,7 +26,7 @@ import subprocess
 
 from theano_models.base_tools import fct_to_inputs_outputs
 from ..deterministic_models import InvertibleModel
-from ..subgraphs import Subgraph, inputting_references, outputting_references, subgraph_inputs, subgraph_outputs
+from ..base import Model, inputting_references, outputting_references, get_inputting_references, get_outputting_references
 from ..util.theano_helpers import is_pseudo_constant, gen_variables, get_profile
 from ..util import deepflatten_keep_vars
 import json
@@ -125,7 +125,7 @@ class MyPyDotFormatter(object):
         ----------
         th_graph : theano.compile.function_module.Function
             A compiled Theano function, variable, apply or a list of variables.
-        subgraphs: list of Subgraph
+        subgraphs: list of Model
             nested structure (realized in cluster)
         match_by_names: bool
             if True, then subgraphs are transformed to match respective nodes in th_graph
@@ -175,7 +175,7 @@ class MyPyDotFormatter(object):
                         with ignored(KeyError):
                             new_sg[key] = name_to_var[value.name]
                     # else ignore value
-                return Subgraph(new_sg, name=sg.name, ignore=True, no_unique_name=True)
+                return Model(new_sg, name=sg.name, ignore=True, no_unique_name=True)
             subgraphs = map(transform_graph, subgraphs)
 
         # core parsing
@@ -222,15 +222,15 @@ class MyPyDotFormatter(object):
                     pd_edge = pd.Edge(self.__node_id(parent), var_id, label="%i %s"%(parent_index, type_to_str(var.type)))
                     dot_graph.add_edge(pd_edge)
 
-                    if isinstance(parent, Subgraph):
+                    if isinstance(parent, Model):
                         current_subgraphs[parent]['ext_outputs'].append((var, var_id))
 
                 # for all variables do:
                 self.make_variable(var, var_spec_type, dot_graph)
 
-            elif isinstance(var, Subgraph):
+            elif isinstance(var, Model):
                 # external_inputs = var['inputs']
-                external_inputs = subgraph_inputs(var)
+                external_inputs = get_inputting_references(var)
                 # think about extracting contants here, as they don't refer outside
                 # postpone model creation because we need information about external inputs/outputs
                 # self.make_nested_model(var, topo, profile, dot_graph)
@@ -263,7 +263,7 @@ class MyPyDotFormatter(object):
                                       label="%i %s" % (parent_index, type_to_str(ext_i.type)))
                     dot_graph.add_edge(pd_edge)
 
-                if isinstance(var, Subgraph):
+                if isinstance(var, Model):
                     # they are already sorted by m['inputs'], hence we don't need the reference to the external input itself
                     current_subgraphs[var]['ext_inputs'].append(ext_id)
 
@@ -375,7 +375,7 @@ class MyPyDotFormatter(object):
             return str([list(x) for x in m])
 
         # Inputs mapping
-        _inputs = subgraph_inputs(m)
+        _inputs = get_inputting_references(m)
         assert len(ext_inputs) == len(_inputs)
         # not all internal inputs might be shown externally
         ext_int_inputs = [(e, gf.__node_id(i)) for e, i in izip(ext_inputs, _inputs) if e is not None]
@@ -387,7 +387,7 @@ class MyPyDotFormatter(object):
 
         # Output mapping
         hashmap = {hash(v): v_id for v, v_id in ext_outputs}
-        _outputs = subgraph_outputs(m)
+        _outputs = get_outputting_references(m)
         ext_outputs = []
         int_outputs = []
         for o in _outputs:
@@ -449,7 +449,7 @@ def subgraph_profile(m, profile):
     call_time = profile.fct_call_time
     time = reduce(op.add, (
         profile.apply_time.get(node, 0)
-        for node in gof.graph.io_toposort(subgraph_inputs(m), subgraph_outputs(m))
+        for node in gof.graph.io_toposort(get_inputting_references(m), get_outputting_references(m))
     ))
     return [time, call_time]
 
@@ -543,10 +543,18 @@ def get_nested_subgraph(ext_o, subgraphs):
 
 
 def is_identity(o, model):
+    """ this method checks whether o is in input of model (or in input of inverse of model)
+
+    when assuming o is also output from model, this is a check whether the model works only as an identity """
+    # generic model itself
     for inp in inputting_references.intersection(model):
         for i in convert(model[inp], Sequence):
             if i == o:
                 return True
+    # invertible models (encompass two models, model and model.inverse, which is why this case is not handled
+    # by the above generic search)
+    if isinstance(model, InvertibleModel) and model.is_identity and o == model['outputs']:  # TODO this assumes singular output InvertibleModels
+        return True
     return False
 
 
@@ -581,7 +589,7 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_nam
         Path to output HTML file.
     subgraphs : list of Subgraphs
         become (possibly nested) subgraphs
-    ignore_subgraphs : list of Subgraph
+    ignore_subgraphs : list of Model
         these will be ignored for nesting
     match_by_names: bool
         if True, then subgraphs are transformed to match respective nodes in th_graph
@@ -596,7 +604,7 @@ def d3viz(th_graph, outfile, subgraphs=None, ignore_subgraphs=None, match_by_nam
 
     """
     if subgraphs is None:
-        subgraphs = Subgraph.all_subgraphs[::-1]  # inverse as latest are probably more complex
+        subgraphs = Model.all_models[::-1]  # inverse as latest are probably more complex
 
     if ignore_subgraphs is not None:
         for m in ignore_subgraphs:

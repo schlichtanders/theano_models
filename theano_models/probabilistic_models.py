@@ -2,29 +2,29 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 
+from collections import Sequence
+from numbers import Number
+
 import numpy as np
 import theano.tensor as T
 import theano
-from theano.ifelse import ifelse
 from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 from theano.printing import Print
 
-import subgraphs
-from subgraphs import subgraphs_as_outputs, subgraph_modify, inputting_references, outputting_references
-from base import Model, Merge
-from deterministic_models import InvertibleModel
+from base import Model, Merge, track_merge, models_as_outputs, inputting_references, outputting_references
 from schlichtanders.mydicts import update
 from util import as_tensor_variable, U
 from itertools import izip
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+
 #: global random number generator used by default:
 RNG = RandomStreams()
 
 outputting_references.update(['logP'])
-inputting_references.update(['parameters', 'parameters_positive', 'parameters_psumto1', 'noise'])
+inputting_references.update(['parameters', 'parameters_positive', 'parameters_psumto1'])
 
 """
 Probabilistic Modelling
@@ -156,7 +156,7 @@ class GaussianNoise(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, input=None, init_var=None, rng=None):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
@@ -189,15 +189,14 @@ class GaussianNoise(Model):
         super(GaussianNoise, self).__init__(
             outputs=outputs,
             inputs=[input],
-            noise=[self.noise],
             parameters=[],
             parameters_positive=[self.var]
         )
 
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
-        @subgraphs_as_outputs
-        @subgraph_modify(self)
+        @models_as_outputs
+        @track_merge(self, ignore_references=outputting_references)
         def logP(rv):
             return (
                 - (input.size/2) * (T.log(2*np.pi) + T.log(self.var))   # normalizing constant
@@ -225,7 +224,7 @@ class DiagGaussianNoise(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, input=None, init_var=None, rng=None, use_log2=True):
         """Add a DiagGauss random noise around given input with given variance (defaults to 1).
 
@@ -261,7 +260,6 @@ class DiagGaussianNoise(Model):
         super(DiagGaussianNoise, self).__init__(
             outputs=outputs,
             inputs=[input],
-            noise=[self.noise],
             parameters=[],
             parameters_positive=[self.var]
         )
@@ -270,16 +268,16 @@ class DiagGaussianNoise(Model):
         # to support this view, we need to reference self:
 
         if use_log2:
-            @subgraphs_as_outputs
-            @subgraph_modify(self)
+            @models_as_outputs
+            @track_merge(self, ignore_references=outputting_references)  # keep reference to mean (inputs/outputs are replaced)
             def logP(rv):
                 return (
                     (-input.size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log2(self.var).sum()/T.log2(np.e)  # normalizing constant
                     - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
                 )  # everything is elementwise
         else:
-            @subgraphs_as_outputs
-            @subgraph_modify(self)
+            @models_as_outputs
+            @track_merge(self, ignore_references=outputting_references)
             def logP(rv):
                 return (
                     (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
@@ -313,8 +311,8 @@ class Gauss(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @subgraphs_as_outputs
-    def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None):
+    @models_as_outputs
+    def __init__(self, output_shape=tuple(), init_mean=None, init_var=None, rng=None):
         """Initialise a DiagGauss random variable with given mean and variance.
 
         Mean default to 0, and var to 1, if not further specified, i.e. standard gaussian random variable.
@@ -322,8 +320,8 @@ class Gauss(Model):
         Parameters
         ----------
 
-        output_size : int
-            number of outputs
+        output_shape : tuple of int
+            shape of output
         init_mean : np.array
             means, same length as variances
         init_var : scalar > 0
@@ -334,9 +332,11 @@ class Gauss(Model):
         # parameter preprocessing
         # -----------------------
         # ensure length is the same:
-        self.output_size = output_size
+        if not isinstance(output_shape, Sequence):
+            output_shape = (output_shape,)
+        self.output_shape = output_shape
         if init_mean is None:
-            init_mean = T.zeros((output_size,), dtype=config.floatX)
+            init_mean = T.zeros(output_shape, dtype=config.floatX)
 
         # main part
         # ---------
@@ -369,7 +369,7 @@ class DiagGauss(Model):
     rng : Theano RandomStreams object.
         Random number generator to draw samples from the distribution from.
     """
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, output_size=1, init_mean=None, init_var=None, rng=None, use_log2=True):
         """Initialise a DiagGauss random variable with given mean and variance.
 
@@ -423,7 +423,7 @@ class Categorical(Model):
             the element being 1 and all others being 0. I.e. rows sum up to 1.
 
         """
-        @subgraphs_as_outputs
+        @models_as_outputs
         def __init__(self, probs, rng=None, eps=1e-8):
             """Initialize a Categorical object.
 
@@ -438,6 +438,8 @@ class Categorical(Model):
             rng : Theano RandomStreams object, optional.
                 Random number generator to draw samples from the distribution from.
             """
+            if isinstance(probs, Number):
+                probs = as_tensor_variable(np.ones(probs)/probs)
             self.rng = rng or RNG
             self.probs = probs
             self._probs = T.clip(self.probs, eps, 1 - eps)
@@ -450,8 +452,8 @@ class Categorical(Model):
             )
             # logP needs to be added after Model creation, as it is kind of an alternative view of the model
             # to support this view, we need to reference self:
-            @subgraphs_as_outputs
-            @subgraph_modify(self)
+            @models_as_outputs
+            @track_merge(self, ignore_references=outputting_references)
             def logP(rv):
                 return T.sum(rv * T.log(self._probs))
             self['logP'] = logP
@@ -459,7 +461,7 @@ class Categorical(Model):
 
 class Uniform(Model):
 
-    @subgraphs_as_outputs
+    @models_as_outputs
     def __init__(self, output_size=1, init_start=None, init_offset=None, rng=None):
         """ Initialise a uniform random variable with given range (by start and offset).
 
@@ -509,15 +511,14 @@ class Uniform(Model):
         super(Uniform, self).__init__(
             outputs=outputs,
             inputs=[],
-            noise=[noise],
             parameters=[self.start],
             parameters_positive=[self.offset]
         )
 
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
-        @subgraphs_as_outputs
-        @subgraph_modify(self)
+        @models_as_outputs
+        @track_merge(self, ignore_references=outputting_references)
         def logP(rv):
             # summed over independend components
             return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
@@ -554,8 +555,8 @@ class Mixture(Model):
         self.rng = kwargs.pop('rng', RNG)
         merge = Merge(*prob_models, **kwargs)
 
-        @subgraphs_as_outputs
-        @subgraph_modify(merge)
+        @models_as_outputs
+        @merge(merge, ignore_references=outputting_references)
         def logP(rv):
             # we use a numerical stable version of the log applied to sum of exponentials:
             logPs = [m['logP'](rv) for m in prob_models]

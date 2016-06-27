@@ -16,7 +16,7 @@ from schlichtanders import myfunctools
 from schlichtanders.mygenerators import eatN, chunk, chunk_list, every, takeN
 
 from theano_models import (Merge, Flatten, Reparameterize, reduce_all_identities,
-                           inputting_references, outputting_references)
+                           inputting_references, outputting_references, models_as_outputs)
 from theano_models.tools import (as_tensor_variable, total_size, clone, clone_all,PooledRandomStreams,
                                  get_profile, squareplus, squareplus_inv, softplus, softplus_inv)
 import theano_models.deterministic_models as dm
@@ -25,6 +25,7 @@ import theano_models.postmaps as post
 from theano_models.composing import normalizing_flow, variational_bayes
 
 from theano.tensor.shared_randomstreams import RandomStreams
+import theano.tensor as T
 
 from sqlalchemy import Column, Integer, Unicode, UnicodeText, String, PickleType, Float
 from sqlalchemy import create_engine
@@ -33,11 +34,11 @@ from sqlalchemy.ext.declarative import declarative_base
 
 import warnings
 from schlichtanders.myobjects import NestedNamespace
-from schlichtanders.myos import replace_unc
 import platform
 
 __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":
+    from schlichtanders.myos import replace_unc
     __file__ = replace_unc(__file__)
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
@@ -128,7 +129,7 @@ class RandomHyper(Base):
         if self.opt_identifier == "adadelta":
             self.opt_momentum = random.choice([np.random.uniform(0, 0.01), np.random.uniform(0.9, 1)])
             self.opt_offset = random.choice([5e-5, 1e-8])
-            self.opt_step_rate = 1
+            self.opt_step_rate = random.choice([1, 1e-3, 1e-4, 1e-5])
         elif self.opt_identifier == "adam":
             self.opt_momentum = random.choice([np.random.uniform(0, 0.01), np.random.uniform(0.8, 0.93)])
             self.opt_offset = 10 ** -np.random.uniform(3, 4)
@@ -172,18 +173,25 @@ predictor = dm.Mlp(
 )
 target_distribution = pm.Categorical(predictor)
 targets = Merge(target_distribution, predictor,
-                Flatten(predictor['parameters'], flat_key="to_be_randomized")) #givens={predictor['inputs'][0]: X[0]}
+                Flatten(predictor['parameters'], flat_key="to_be_randomized"))  # givens={predictor['inputs'][0]: X[0]}
 
 
 # parameter modelling
 # -------------------
-
-params_base = pm.DiagGauss(output_size=total_size(targets['to_be_randomized']))
+tsize = total_size(targets['to_be_randomized'])
+params_base = pm.Gauss(output_size=tsize)  # normalizing flow paper uses same variance everywhere
+params_base = Merge(params_base, parameters=None)  # leave mean to zero because of planar flows
 normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]
 
 params = params_base
 for transform in normflows:
-    params = normalizing_flow(transform, params)  # returns transform, however with adapted logP    
+    params = normalizing_flow(transform, params)  # returns transform, however with adapted logP
+
+new_mean = T.zeros((tsize,))
+params['outputs'] + new_mean
+@models_as_outputs
+def logP(rv):
+    params['logP'](rv - new_mean)
 
 
 # bayes
