@@ -31,12 +31,6 @@ import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
-theano.function
-theano.compile.pfunc
-theano.gof.opt.SeqOptimizer
-theano.gof.opt.MergeOptimizer
-theano.tensor.log
-theano.gof.fg
 from theano.tensor.shared_randomstreams import RandomStreams
 
 
@@ -120,7 +114,7 @@ class Model(MutableMapping):
     all_models = []
 
     @models_as_outputs
-    def __init__(self, outputs, inputs=None, name=None, ignore=False, no_unique_name=False, **further_references):
+    def __init__(self, outputs, inputs=None, name=None, track=True, unique_name=True, **further_references):
         """
         Constructs a Model by directly referencing outputs and inputs, and further_references
         It does essentially nothing, but gives them a summarizing class interface.
@@ -133,9 +127,9 @@ class Model(MutableMapping):
             functional like inputs
             if not given explicitly ``inputs`` get set to ``theano_models.util.theano_helpers.get_inputs(outputs)``
         name : str or None
-            like Subgraph name parameter
-        ignore : bool
-            like Subgraph ignore parameter
+            name for this model
+        track : bool
+            whether the model shall be tracked in the global variable ``Model.all_models``
         further_references: kwargs of theano expressions, or lists thereof
             possible further references
         """
@@ -155,7 +149,7 @@ class Model(MutableMapping):
         # -----
         if name is None:
             name = self.__class__.__name__
-        self.name = name if no_unique_name else U(name)
+        self.name = U(name) if unique_name else name
 
         # set names of references if not done so already
         for k, v in self.iteritems():
@@ -167,18 +161,18 @@ class Model(MutableMapping):
                 if hasattr(v, 'name') and v.name is None:
                     v.name = "%s.%s" % (self.name, k)
 
-        if not ignore:
+        if track:
             Model.all_models.append(self)
 
     def __copy__(self):
         return self.copy()
 
-    def copy(self, ignore=True):
+    def copy(self, track=False):
         cls = self.__class__
         cp = cls.__new__(cls)
         cp.references = {k: v[:] if isinstance(v, Sequence) else v for k, v in self.references.iteritems()}
         cp.name = self.name
-        if not ignore:
+        if track:
             Model.all_models.append(cp)
         return cp
 
@@ -346,7 +340,9 @@ class Merge(Model):
         subgraphs : Model or dict of references
             to be combined consistently
         name : str
-            like in Model
+            see Model
+        track : bool
+            see Model, defaults to False
         convert_singletons_to_list : Bool, default False
             if True then all single variables are wrapped into lists if combined with other subgraphs
             if False then the first reference is taken
@@ -367,7 +363,7 @@ class Merge(Model):
         if keep_references == "all":
             keep_references = None
         name = other_references.pop("name", None)
-        ignore = other_references.pop("ignore", True)
+        track = other_references.pop("track", False)
         self.original_subgraphs = subgraphs
         self.copied_subgraphs = map(copy, subgraphs)
 
@@ -438,7 +434,7 @@ class Merge(Model):
 
         # deleting empty lists at the end does not make sense, as certain references need to stay []
         # (e.g. inputs, but probably also others)
-        super(Merge, self).__init__(name=name, ignore=ignore, **merge)
+        super(Merge, self).__init__(name=name, track=track, **merge)
         # for convenience copy the dict entries too:
         for s in subgraphs:
             update(self.__dict__, s.__dict__, overwrite=False)
@@ -605,8 +601,39 @@ Core Decorators
 to easily track functions as Models (e.g. for visualization)
 """
 
+
+@wrapt.decorator
+def as_model(wrapped, instance, args, kwargs):
+    """ function wrapper which tracks each function execution as a Model
+
+    with inputs, outputs set to the function's arguments / return values
+
+    Parameters
+    ----------
+    name : str
+        see Model, defaults to ``wrapped.func_name``
+    everything else see Model
+
+    Returns
+    -------
+    decorated function which returns the respective model.
+    Combine it with ``model_to_output`` or use ``track_model`` directly to return the function output instead.
+    """
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+
+    return Model(
+        name=wrapped.func_name,
+        inputs=remove_duplicates(deepflatten_keep_vars(args)),
+        outputs=outputs
+    )
+
 @wrapt.decorator
 def track_model(wrapped, instance, args, kwargs):
+    """ like ``as_model``, however the decorated functions returns its normal output instead of the respective model
+
+    it is nevertheless tracked """
     outputs = wrapped(*args, **kwargs)
     if isinstance(outputs, types.GeneratorType):
         outputs = list(outputs)
@@ -619,16 +646,52 @@ def track_model(wrapped, instance, args, kwargs):
     return outputs
 
 
-def track_merge(*merge_subgraphs, **merge_kwargs):
+def as_merge(*merge_subgraphs, **merge_kwargs):
     """ Decorates a function to be listed as a Model
     Thereby the Model defined by the given Merge parameters is adapted by the function {inputs:..., outpupts:...}
     dictionary to create and list a new Model
 
     Parameters
     ----------
-    see Merge
+    track : bool
+        see Merge, defaults to True
+    name : str
+        see Merge, defaults to concatination of first given ``subgraph.name`` with ``wrapped.func_name``
+    everything else see Merge
+
+    Returns
+    -------
+    decorated function which returns the respective Model instead of the output.
+    Combine it with ``model_to_output`` or use ``track_merge`` directly to return the function output instead.
     """
-    ignore = merge_kwargs.pop('ignore', False)
+    track = merge_kwargs.pop('track', True)
+    def decorator(wrapped):
+        name = merge_kwargs.pop('name', None)
+        if name is None:
+            try:
+                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
+            except StopIteration:
+                name = ""
+            name += wrapped.func_name
+
+        @wraps(wrapped)
+        def wrapper(*args, **kwargs):
+            outputs = wrapped(*args, **kwargs)
+            if isinstance(outputs, types.GeneratorType):
+                outputs = list(outputs)
+            return Merge(*merge_subgraphs,
+                  name=name, track=track,
+                  inputs=list(args), outputs=outputs,
+                  **merge_kwargs)
+        return wrapper
+    return decorator
+
+
+def track_merge(*merge_subgraphs, **merge_kwargs):
+    """ like ``as_merge``, however the decorated functions returns its normal output instead of the respective model
+
+    it is nevertheless tracked """
+    track = merge_kwargs.pop('track', True)
     def decorator(wrapped):
         name = merge_kwargs.pop('name', None)
         if name is None:
@@ -644,7 +707,7 @@ def track_merge(*merge_subgraphs, **merge_kwargs):
             if isinstance(outputs, types.GeneratorType):
                 outputs = list(outputs)
             Merge(*merge_subgraphs,
-                  name=name, ignore=ignore,
+                  name=name, track=track,
                   inputs=list(args), outputs=outputs,
                   **merge_kwargs)
             return outputs

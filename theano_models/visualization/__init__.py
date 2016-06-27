@@ -175,7 +175,7 @@ class MyPyDotFormatter(object):
                         with ignored(KeyError):
                             new_sg[key] = name_to_var[value.name]
                     # else ignore value
-                return Model(new_sg, name=sg.name, ignore=True, no_unique_name=True)
+                return Model(new_sg, name=sg.name, track=False, unique_name=False)
             subgraphs = map(transform_graph, subgraphs)
 
         # core parsing

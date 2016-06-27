@@ -20,7 +20,7 @@ from theano.gof.graph import Variable
 from theano.compile import Function
 
 from schlichtanders.myfunctools import convert
-from base import Model, Merge, track_model, track_merge, get_inputting_references, get_outputting_references
+from base import Model, Merge, track_model, as_merge, get_inputting_references, get_outputting_references
 from util import as_tensor_variable, clone, deepflatten_keep_vars
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -193,7 +193,7 @@ def fct_to_inputs_outputs(th_graph):
         def subgraphs():
             for sub_graph in th_graph:
                 inputs, outputs = fct_to_inputs_outputs(sub_graph)
-                yield Model(ignore=True, inputs=inputs, outputs=outputs)
+                yield Model(track=False, inputs=inputs, outputs=outputs)
         inputs, outputs = fct_to_inputs_outputs(Merge(*subgraphs()))
     elif isinstance(th_graph, Model):
         # inputs, outputs = th_graph['inputs'], th_graph['outputs']

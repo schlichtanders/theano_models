@@ -12,7 +12,7 @@ from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 from theano.printing import Print
 
-from base import Model, Merge, track_merge, models_as_outputs, inputting_references, outputting_references
+from base import Model, Merge, as_merge, models_as_outputs, inputting_references, outputting_references
 from schlichtanders.mydicts import update
 from util import as_tensor_variable, U
 from itertools import izip
@@ -196,7 +196,7 @@ class GaussianNoise(Model):
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
         @models_as_outputs
-        @track_merge(self, ignore_references=outputting_references)
+        @as_merge(self, ignore_references=outputting_references)
         def logP(rv):
             return (
                 - (input.size/2) * (T.log(2*np.pi) + T.log(self.var))   # normalizing constant
@@ -269,7 +269,7 @@ class DiagGaussianNoise(Model):
 
         if use_log2:
             @models_as_outputs
-            @track_merge(self, ignore_references=outputting_references)  # keep reference to mean (inputs/outputs are replaced)
+            @as_merge(self, ignore_references=outputting_references)  # keep reference to mean (inputs/outputs are replaced)
             def logP(rv):
                 return (
                     (-input.size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log2(self.var).sum()/T.log2(np.e)  # normalizing constant
@@ -277,7 +277,7 @@ class DiagGaussianNoise(Model):
                 )  # everything is elementwise
         else:
             @models_as_outputs
-            @track_merge(self, ignore_references=outputting_references)
+            @as_merge(self, ignore_references=outputting_references)
             def logP(rv):
                 return (
                     (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
@@ -453,7 +453,7 @@ class Categorical(Model):
             # logP needs to be added after Model creation, as it is kind of an alternative view of the model
             # to support this view, we need to reference self:
             @models_as_outputs
-            @track_merge(self, ignore_references=outputting_references)
+            @as_merge(self, ignore_references=outputting_references)
             def logP(rv):
                 return T.sum(rv * T.log(self._probs))
             self['logP'] = logP
@@ -518,7 +518,7 @@ class Uniform(Model):
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
         @models_as_outputs
-        @track_merge(self, ignore_references=outputting_references)
+        @as_merge(self, ignore_references=outputting_references)
         def logP(rv):
             # summed over independend components
             return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()

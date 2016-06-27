@@ -10,7 +10,7 @@ from schlichtanders.myfunctools import convert
 from schlichtanders.mylists import return_list, as_list
 from theano import gof
 import theano.tensor as T
-from base import Model, Merge, track_merge, models_as_outputs, inputting_references, outputting_references
+from base import Model, Merge, as_merge, models_as_outputs, inputting_references, outputting_references
 from collections import Sequence
 
 from base_tools import total_size
@@ -51,10 +51,15 @@ def normalizing_flow(invertible_model, base_prob_model):
     merge = Merge(invertible_model, base_prob_model, name="normalized_flow")
 
     @models_as_outputs
-    @track_merge(merge, ignore_references=outputting_references, extra_inputs=[invertible_model['norm_det']])
     def logP(y):
         invertible_model.inverse['inputs'] = y
-        return base_prob_model['logP'](invertible_model.inverse['outputs']) - T.log(abs(invertible_model['norm_det']))  # equation (5)
+        logP_base = base_prob_model['logP'](invertible_model.inverse['outputs'])
+        return Merge(invertible_model, logP_base,
+            name='normalized_flow.logP', track=True,
+            ignore_references=outputting_references,
+            inputs=[y, invertible_model['norm_det']],
+            outputs=logP_base['outputs'] - T.log(abs(invertible_model['norm_det']))  # equation (5))
+        )
 
     # adapt invertible_model too, as otherwise Y['invertible_modellogP'] would not mirror the sampler invertible_model['outputs']
     invertible_model['logP'] = logP
@@ -155,24 +160,20 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
         # as we assume independent sub distribution,
         # the overall log_prior_distr or log_posterior_distr can be computed as a sum of the single log
         # Note, that the variational lower bound requires to substitute RV from X into every distribution function
-        def log_prior_distr():
+        def log_prior():
             for prior, X in izip(priors, Xs):
                 if isinstance(prior, Model):
                     prior = prior['logP']  # merge must be done outside
                 # else prior is already a logP function
-                yield prior(X)
+                yield prior(X)['outputs']
 
-        def log_posterior_distr():
+        def log_posterior():
             for X in Xs:
-                yield X['logP'](X)
+                yield X['logP'](X)['outputs']
 
-        Y['logposterior'] = T.add(*log_posterior_distr())
-        Y['logprior'] = T.add(*log_prior_distr())
+        Y['logposterior'] = T.add(*log_posterior())
+        Y['logprior'] = T.add(*log_prior())
         kl_prior = Y['logposterior'] - Y['logprior']
-        # kl_prior.name = "kl_prior"  # automatically given
-        extra_inputs = shallowflatten_keep_vars(x['outputs'] for x in Xs)
-    else:
-        extra_inputs = [kl_prior]
 
     # core variational bayes
     # ----------------------
@@ -187,15 +188,19 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
     subgraphs = [Y]
     subgraphs += Xs
     subgraphs += priors
-
     merge = Merge(*(sg for sg in subgraphs if isinstance(sg, Model)),
                   name="variational_lower_bound")
 
     # the variational lower bound as approximation of logP:
     @models_as_outputs
-    @track_merge(merge, ignore_references=outputting_references, extra_inputs=extra_inputs)
     def logP(rv):
-        return Y['loglikelihood'](rv) - T.inv(Y['n_data']) * kl_prior
+        logP_Y = Y['loglikelihood'](rv)
+        return Merge(logP_Y,
+            name="variational_lower_bound.logP", track=True,
+            ignore_references=outputting_references,
+            inputs=[rv, kl_prior],
+            outputs=logP_Y['outputs'] - T.inv(Y['n_data']) * kl_prior
+        )
 
     # adapt Y as well, as otherwise Y['logP'] would not mirror the sampler Y['outputs']
     Y['logP'] = logP
