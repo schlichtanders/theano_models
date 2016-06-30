@@ -87,13 +87,12 @@ def probabilistic_optimizer_postmap(model):
     -------
     IdentityDict over model with standard optimizer keys
     """
-    rv = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
-        loss_inputs=[rv] + model['inputs'],
-        loss=-model['logP'](rv)['outputs']
+        loss_inputs=model.logP['inputs'] + model['inputs'],
+        loss=-model.logP['outputs']
     )
 
-from theano.tensor import dvector
+
 """
 Annealing Postmaps
 ------------------
@@ -130,22 +129,20 @@ def regularizer_postmap(model, regularizer_norm=L2, regularizer_scalar=1, key_pa
 
 def variational_postmap(model):
     """use this postmap INSTEAD of the standard probabilistic postmap"""
-    rv = model['outputs'].type("probabilistic_target")  # like targets for deterministic model
     return PassThroughDict(model,
-        loss_inputs=[rv] + model['inputs'],
-        loss=-model['logP'](rv)['outputs'],
-        loss_data=-model['loglikelihood'](rv)['outputs'],
+        loss_inputs=model.logP['inputs'] + model['inputs'],
+        loss=-model.logP['outputs'],
+        loss_data=-model.loglikelihood['outputs'],  # indeed uses the same inputs as model.logP
         loss_regularizer=model['kl_prior']
     )
 
 
 def normalizingflow_postmap(model):
     """ use this postmap INSTEAD of the standard probabilistic postmap """
-    rv = model['outputs'].type("probabilistic_target")
     return PassThroughDict(model,
-        loss_inputs=[rv] + model['inputs'],
-        loss=-model['logP'](rv)['outputs'],
-        loss_data=-model['loglikelihood'](rv)['outputs'] - model['logprior'],
+        loss_inputs=model.logP['inputs'] + model['inputs'],
+        loss=-model.logP['outputs'],
+        loss_data=-model.loglikelihood['outputs'] - model['logprior'],
         loss_regularizer=model['logposterior'],
     )
 

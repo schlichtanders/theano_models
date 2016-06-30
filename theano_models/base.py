@@ -109,7 +109,7 @@ class Model(MutableMapping):
     and so on.
     """
 
-    ALLOWED_VALUETYPES = gof.Variable, types.FunctionType
+    ALLOWED_VALUETYPES = (gof.Variable, )
 
     all_models = []
 
@@ -136,7 +136,7 @@ class Model(MutableMapping):
         # references
         # ----------
         if inputs is None:
-            inputs = get_graph_inputs(outputs)
+            inputs = []  # get_graph_inputs(outputs)  # this wasn't needed until now, only throughed bugs here and there
         inputs = convert(inputs, Sequence)
 
         self.references = {
@@ -155,11 +155,18 @@ class Model(MutableMapping):
         for k, v in self.iteritems():
             if isinstance(v, Sequence):
                 for i, x in enumerate(v):
-                    if hasattr(x, 'name') and x.name is None:
-                        x.name = "%s.%s.%i" % (self.name, k, i)
+                    if hasattr(x, 'name'):
+                        if x.name is None:
+                            x.name = "%s.%s.%i" % (self.name, k, i)
+                        # elif unique_name:
+                        #     x.name = U(x.name)
+                        # not useful, as this also applies to variables of already declared models which are reused here...
             else:
-                if hasattr(v, 'name') and v.name is None:
-                    v.name = "%s.%s" % (self.name, k)
+                if hasattr(v, 'name'):
+                    if v.name is None:
+                        v.name = "%s.%s" % (self.name, k)
+                    # elif unique_name:
+                        # v.name = U(v.name)
 
         if track:
             Model.all_models.append(self)

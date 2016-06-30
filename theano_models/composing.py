@@ -30,6 +30,7 @@ Note, like all wrappers, also these are composable with standard compose functio
 """
 
 
+# this is not meant as a class, but as a composer, which returns the respective Merge
 def normalizing_flow(invertible_model, base_prob_model):
     """ transforms ``invertible_model['inputs'] = base_prob_model`` while adding correct ``logP``
 
@@ -50,20 +51,19 @@ def normalizing_flow(invertible_model, base_prob_model):
     invertible_model['inputs'] = base_prob_model
     merge = Merge(invertible_model, base_prob_model, name="normalized_flow")
 
-    @models_as_outputs
-    def logP(y):
-        invertible_model.inverse['inputs'] = y
-        logP_base = base_prob_model['logP'](invertible_model.inverse['outputs'])
-        return Merge(invertible_model, logP_base,
-            name='normalized_flow.logP', track=True,
-            ignore_references=outputting_references,
-            inputs=[y, invertible_model['norm_det']],
-            outputs=logP_base['outputs'] - T.log(abs(invertible_model['norm_det']))  # equation (5))
-        )
+    # logP
+    # ----
+    rv = merge['outputs'].type("rv")
+    invertible_model.inverse['inputs'] = rv
+    base_prob_model.logP['inputs'] = invertible_model.inverse['outputs']
 
-    # adapt invertible_model too, as otherwise Y['invertible_modellogP'] would not mirror the sampler invertible_model['outputs']
-    invertible_model['logP'] = logP
-    merge['logP'] = logP
+    logP = Merge(invertible_model.inverse, base_prob_model.logP, name='normalized_flow.logP', track=True,
+        extra_inputs=[invertible_model['norm_det']],
+        outputs=base_prob_model.logP['outputs'] - T.log(abs(invertible_model['norm_det']))
+    )
+    # adapt invertible_model too, as otherwise Y.logP['outputs'] would not mirror the sampler Y['outputs']
+    invertible_model.logP = logP
+    merge.logP = logP
     return merge
 
 
@@ -86,7 +86,7 @@ which itself is an approximation (a lower bound) of exactly this Probability dis
 """
 
 
-def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_priors=True):
+def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     """
     Models Y[randomize_key] as random variable Xs using Bayes. I.e. like Y[randomize_key] = Xs. However, the probability
     function changes, concretely Y['logP'] becomes an integral. Here, this intergral is approximated by the
@@ -131,16 +131,12 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
     kl_prior : theano expression or Model (if parameters need to be merged)
         kullback leibler divergence KL(X.P||prior). This does not depend any longer on X if I understood it correctly,
         but only on hyperparameters.
-
-    merge_priors : bool
-        if True, the prior is also merged into the final model
-        this is usually not wanted, as there are reasons that the prior parameters are learned via Hyperparametersearch.
     """
     if randomize_key not in inputting_references:
         raise ValueError("Only an inputting reference makes sense for `randomize_key`.")
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
-    if 'loglikelihood' in Y:
+    if hasattr(Y, 'loglikelihood'):
         # variational lower bound detected
         raise RuntimeError("Cannot perform variational lower bound twice on the same Y.")
         # reason: we don't want/cannot redo the proxifying, hence when executing variational_bayes a second time on the
@@ -162,14 +158,16 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
         # Note, that the variational lower bound requires to substitute RV from X into every distribution function
         def log_prior():
             for prior, X in izip(priors, Xs):
-                if isinstance(prior, Model):
-                    prior = prior['logP']  # merge must be done outside
-                # else prior is already a logP function
-                yield prior(X)['outputs']
+                if hasattr(prior, 'logP'):
+                    prior = prior.logP
+                # else prior is already a logP Model
+                prior['inputs'] = X
+                yield prior['outputs']
 
         def log_posterior():
             for X in Xs:
-                yield X['logP'](X)['outputs']
+                X.logP['inputs'] = X
+                yield X.logP['outputs']
 
         Y['logposterior'] = T.add(*log_posterior())
         Y['logprior'] = T.add(*log_prior())
@@ -179,7 +177,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
     # ----------------------
     Y['kl_prior'] = kl_prior
 
-    Y['loglikelihood'] = Y['logP']
+    Y.loglikelihood = Y.logP
     if "n_data" not in Y:
         Y['n_data'] = theano.shared(1, "n_data")  # needs to be updated externally, therefore real theano.shared variable here
 
@@ -192,21 +190,13 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None, merge_pr
                   name="variational_lower_bound")
 
     # the variational lower bound as approximation of logP:
-    @models_as_outputs
-    def logP(rv):
-        logP_Y = Y['loglikelihood'](rv)
-        return Merge(logP_Y,
-            name="variational_lower_bound.logP", track=True,
-            ignore_references=outputting_references,
-            inputs=[rv, kl_prior],
-            outputs=logP_Y['outputs'] - T.inv(Y['n_data']) * kl_prior
-        )
-
-    # adapt Y as well, as otherwise Y['logP'] would not mirror the sampler Y['outputs']
-    Y['logP'] = logP
-    merge['logP'] = logP
+    logP = Merge(Y.loglikelihood, name="variational_lower_bound.logP", ignore_references=outputting_references, track=True,
+                 extra_inputs=[kl_prior],
+                 outputs=Y.loglikelihood['outputs'] - T.inv(Y['n_data']) * kl_prior)
+    # adapt Y as well, as otherwise Y.logP['outputs'] would not mirror the sampler Y['outputs']
+    Y.logP = logP
+    merge.logP = logP
     return merge
-
 
 
 """
@@ -214,6 +204,7 @@ adaptations of graphs
 =====================
 """
 
+
 def fix_params(model):
-    fix = {p: None for p in inputting_references if "parameter" in p}
-    return Merge(model, name=model.name+"_fixed", **fix)
+    fix = {p for p in inputting_references if "parameter" in p}
+    return Merge(model, name=model.name+"_fixed", ignore_references=fix)

@@ -23,8 +23,7 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 #: global random number generator used by default:
 RNG = RandomStreams()
 
-outputting_references.update(['logP'])
-inputting_references.update(['parameters', 'parameters_positive', 'parameters_psumto1'])
+inputting_references.update(['parameters', 'parameters_positive', 'parameters_psumto1', 'extra_inputs'])
 
 """
 Probabilistic Modelling
@@ -181,7 +180,7 @@ class GaussianNoise(Model):
             init_var = 1.0
             # TODO ensure that input does not get another shape!!!
 
-        self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
+        self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
         self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
@@ -195,15 +194,17 @@ class GaussianNoise(Model):
 
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
-        @models_as_outputs
-        @as_merge(self, ignore_references=outputting_references)
-        def logP(rv):
-            return (
+        rv = outputs.type("rv")
+        # to have a clear interface, that logP always is a function from rv to probability, we remap inputs
+        self.logP = Merge(Merge(self, inputs="extra_inputs"),
+            name=self.name + ".logP", track=True,
+            ignore_references=outputting_references,
+            inputs=[rv],
+            outputs=(
                 - (input.size/2) * (T.log(2*np.pi) + T.log(self.var))   # normalizing constant
                 - (1/2 * T.sum((rv - input)**2 / self.var))  # core exponential
             )  # everything is elementwise
-
-        self['logP'] = logP
+         )
 
 
 class DiagGaussianNoise(Model):
@@ -249,10 +250,10 @@ class DiagGaussianNoise(Model):
         if input is None:
             input = T.vector()
         if init_var is None:
-            init_var = T.ones(input.shape, dtype=config.floatX)
+            init_var = T.ones(input.shape, dtype=config.floatX)  # shape refers always to current input, its like T.shape(input)
             # TODO ensure that input does not get another shape!!!
 
-        self.var = as_tensor_variable(init_var, U("var"))  # may use symbolic shared variable
+        self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
         self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
@@ -266,25 +267,18 @@ class DiagGaussianNoise(Model):
 
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
-
-        if use_log2:
-            @models_as_outputs
-            @as_merge(self, ignore_references=outputting_references)  # keep reference to mean (inputs/outputs are replaced)
-            def logP(rv):
-                return (
-                    (-input.size / 2) * T.log(2 * np.pi) - (1 / 2) * T.log2(self.var).sum()/T.log2(np.e)  # normalizing constant
-                    - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
-                )  # everything is elementwise
-        else:
-            @models_as_outputs
-            @as_merge(self, ignore_references=outputting_references)
-            def logP(rv):
-                return (
-                    (-input.size/2)*T.log(2*np.pi) - (1/2)*T.log(self.var).sum()   # normalizing constant
-                    - (1 / 2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
-                )  # everything is elementwise
-
-        self['logP'] = logP
+        rv = outputs.type("rv")
+        # to have a clear interface, that logP always is a function from rv to probability, extra_inputs
+        self.logP = Merge(Merge(self, inputs="extra_inputs"),
+            name=self.name + ".logP", track=True,
+            ignore_references=outputting_references,
+            inputs=[rv],
+            outputs=(
+                (-input.size / 2) * T.log(2 * np.pi)  # normalizing constant
+                - (1/2 * T.log2(self.var).sum()/T.log2(np.e) if use_log2 else 1/2*T.log(self.var).sum())  # ...
+                - (1/2 * T.sum((rv - input) ** 2 / self.var))  # core exponential
+            )  # everything is elementwise
+        )
 
 
 """
@@ -293,7 +287,7 @@ Base Distributions
 """
 
 
-class Gauss(Model):
+class Gauss(GaussianNoise):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -340,18 +334,17 @@ class Gauss(Model):
 
         # main part
         # ---------
-        self.mean = as_tensor_variable(init_mean, U("mean"))  # TODO broadcastable?
-        gn = GaussianNoise(self.mean, init_var, rng=rng)
-        self.var = gn.var
-        self.noise = gn.noise
-        self.rng = gn.rng
+        self.mean = as_tensor_variable(init_mean, "mean")  # TODO broadcastable?
+        super(Gauss, self).__init__(self.mean, init_var, rng=rng)
 
-        kwargs = {'inputs': [], 'parameters': [self.mean]}
-        update(kwargs, gn, overwrite=False)
-        super(Gauss, self).__init__(**kwargs)
+        # alternative Model Keywords interface:
+        self.references['parameters'] += self.references['inputs']
+        self.references['inputs'] = []
+        self.logP.references['parameters'] += self.logP.references['extra_inputs']
+        del self.logP.references['extra_inputs']
 
 
-class DiagGauss(Model):
+class DiagGauss(DiagGaussianNoise):
     """Class representing a Gaussian with diagnonal covariance matrix.
 
     Attributes
@@ -401,15 +394,15 @@ class DiagGauss(Model):
 
         # main part
         # ---------
-        self.mean = as_tensor_variable(init_mean, U("mean"))  # TODO broadcastable?
-        dgn = DiagGaussianNoise(self.mean, init_var, rng=rng, use_log2=use_log2)
-        self.var = dgn.var
-        self.noise = dgn.noise
-        self.rng = dgn.rng
+        self.mean = as_tensor_variable(init_mean, "mean")  # TODO broadcastable?
+        super(DiagGauss, self).__init__(self.mean, init_var, rng=rng, use_log2=use_log2)
 
-        kwargs = {'inputs': [], 'parameters': [self.mean]}
-        update(kwargs, dgn, overwrite=False)
-        super(DiagGauss, self).__init__(**kwargs)
+        # alternative Model Keywords interface:
+        self.references['parameters'] += self.references['inputs']
+        self.references['inputs'] = []
+        self.logP.references['parameters'] += self.logP.references['extra_inputs']
+        del self.logP.references['extra_inputs']
+
 
 
 class Categorical(Model):
@@ -443,7 +436,7 @@ class Categorical(Model):
             self.rng = rng or RNG
             self.probs = probs
             self._probs = T.clip(self.probs, eps, 1 - eps)
-            self._probs.name = U("clipped probs")
+            self._probs.name = "clipped probs"
 
             super(Categorical, self).__init__(
                 inputs=[],
@@ -452,11 +445,11 @@ class Categorical(Model):
             )
             # logP needs to be added after Model creation, as it is kind of an alternative view of the model
             # to support this view, we need to reference self:
-            @models_as_outputs
-            @as_merge(self, ignore_references=outputting_references)
-            def logP(rv):
-                return T.sum(rv * T.log(self._probs))
-            self['logP'] = logP
+            rv = probs.type("rv")
+            self.logP = Merge(self, name=self.name+'.log', ignore_references=outputting_references, track=True,
+                inputs=[rv],
+                outputs=T.sum(rv * T.log(self._probs))
+            )
 
 
 class Uniform(Model):
@@ -502,8 +495,8 @@ class Uniform(Model):
         if (init_offset <= 0).any():
             raise ValueError("offset must be positive")
 
-        self.start = as_tensor_variable(init_start, U("start"))  # TODO broadcastable?
-        self.offset = as_tensor_variable(init_offset, U("offset"))  # TODO broadcastable?
+        self.start = as_tensor_variable(init_start, "start")  # TODO broadcastable?
+        self.offset = as_tensor_variable(init_offset, "offset")  # TODO broadcastable?
 
         noise = self.rng.uniform(size=(output_size,), dtype=config.floatX)  # everything elementwise # TODO dtype needed?
         outputs = noise * self.offset + self.start  # random sampler
@@ -517,13 +510,12 @@ class Uniform(Model):
 
         # logP needs to be added after Model creation, as it is kind of an alternative view of the model
         # to support this view, we need to reference self:
-        @models_as_outputs
-        @as_merge(self, ignore_references=outputting_references)
-        def logP(rv):
-            # summed over independend components
-            return (T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
-        self['logP'] = logP
-
+        rv = outputs.type("rv")
+        self.logP = Merge(self, name=self.name+".logP", ignore_references=outputting_references, track=True,
+            inputs=[rv],
+            outputs=(T.log(T.le(self.start, rv)) + T.log(T.le(rv, self.start + self.offset)) - T.log(self.offset)).sum()
+                    # summed over independend components
+        )
 
 
 """
@@ -532,7 +524,7 @@ Combining Probabilistic Models
 """
 
 
-class Mixture(Model):
+class Mixture(Merge):
     def __init__(self, *prob_models, **kwargs):
         """
         Parameters
@@ -553,28 +545,36 @@ class Mixture(Model):
             "mixture_probs"
         )
         self.rng = kwargs.pop('rng', RNG)
-        merge = Merge(*prob_models, **kwargs)
 
-        @models_as_outputs
-        @merge(merge, ignore_references=outputting_references)
-        def logP(rv):
-            # we use a numerical stable version of the log applied to sum of exponentials:
-            logPs = [m['logP'](rv) for m in prob_models]
-            ps = [self.mixture_probs[i] for i in xrange(len(logPs))]  # we cannot iterate through symbolic mixture_probs, but we can index
-            max_logP = T.largest(*logPs)
-            h = (p * T.exp(lP - max_logP) for p, lP in izip(ps, logPs))
-
-            return max_logP + T.log(T.add(*h))
+        # sampler
+        # -------
 
         outputs_idx = self.rng.choice(size=tuple(), a=len(prob_models), p=self.mixture_probs)
-        outputs_all = T.as_tensor_variable([m['outputs'] for m in prob_models])  # TODO for some reasons util.as_tensor_variable raises an error here
+        outputs_all = T.stack([pm['outputs'] for pm in prob_models])
         outputs = outputs_all[outputs_idx]
 
-        references = dict(merge)
-        references['outputs'] = outputs
-        references['logP'] = logP
-        if 'parameters_psumto1' in references:
-            references['parameters_psumto1'] += [self.mixture_probs]
-        else:
-            references['parameters_psumto1'] = [self.mixture_probs]
-        super(Mixture, self).__init__(**references)
+        super(Mixture, self).__init__(*prob_models, ignore_references={'outputs'}, track=True,
+            outputs=outputs,
+            parameters_psumto1=[self.mixture_probs]
+        )
+
+        # logP
+        # ----
+        rv = prob_models[0].logP['inputs']
+        for pm in prob_models[0:]:  # same rv for all (other) models
+            pm.logP['inputs'] = rv
+
+        logPs = T.stack([pm.logP['outputs'] for pm in prob_models])  # single vector
+        max_logP = T.max(logPs)
+        self.logP = Merge(*(pm.logP for pm in prob_models), ignore_references=outputting_references, track=True,
+            # input should be rv, as all inputs are rv
+            outputs=max_logP + T.log(T.sum(T.exp(logPs - max_logP) * self.mixture_probs))
+                    # numerical stable version
+        )
+
+        # alternative definition:
+        # logPs = [pm.logP['outputs'] for pm in prob_models]
+        # ps = [self.mixture_probs[i] for i in xrange(len(logPs))]
+        # max_logP = T.largest(*logPs)
+        # h = (p * T.exp(lP - max_logP) for p, lP in izip(ps, logPs))
+        # logP = max_logP + T.log(T.add(*h))
