@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # flat core
-from base import Model, Merge, Reparameterize, Flatten
+from base import Model, Merge, Reparameterize, Flatten, Center
 from base import as_model, track_model, as_merge, track_merge
 from base import inputting_references, outputting_references, models_as_outputs, model_to_output
 from placeholders import Placeholder

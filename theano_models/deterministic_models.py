@@ -273,7 +273,7 @@ class PlanarTransform(InvertibleModel):
         dh = grad(h, _inner)
 
         f = input + self.u * h
-        norm_det = 1 + T.dot(self.u, dh*self.w)  # faster than default symbolic norm_det
+        norm_det = 1 + T.dot(self.u, dh*self.w)  # faster than default symbolic norm_det, gives same result, so this should be correct
 
         super(PlanarTransform, self).__init__(
             inputs=[input],

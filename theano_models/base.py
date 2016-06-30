@@ -66,7 +66,7 @@ default way.
 First some general convention about the keys used within a Model:
 """
 
-inputting_references = set(['inputs', 'flat'])
+inputting_references = set(['inputs', 'flat', 'parameters'])
 outputting_references = set(['outputs'])
 
 
@@ -527,6 +527,35 @@ class Reparameterize(Model):
             outputs=parameters[0] if is_singleton else parameters,
             parameters=underlying_parameters
         )
+
+
+class Center(Model):
+    def __init__(self, parameters):
+        parameters = convert(parameters, Sequence)
+        try:
+            copies = theano.function([], parameters)()
+        except MissingInputError as e:
+            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+            assert all(is_clonable(p) for p in parameters), "can only center clonable parameters"
+            copies = [clone(p) for p in parameters]
+
+        # this works for both numeric or symbolic "copies"
+        zeros = [T.zeros(cp.shape) for cp in copies]
+        for z, p in izip(zeros, parameters):
+            z.name = str(p) + "_centered"
+        for p, z, cp in izip(parameters, zeros, copies):
+            new_name = str(p) + "_centered"
+            proxify(p, z + cp)
+            p.name = new_name
+
+        super(Center, self).__init__(
+            inputs=[],
+            parameters=zeros,
+            outputs=parameters
+        )
+
+
+
 
 
 class Flatten(Model):

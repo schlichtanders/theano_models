@@ -135,7 +135,7 @@ def variational_postmap(model):
         loss_inputs=[rv] + model['inputs'],
         loss=-model['logP'](rv)['outputs'],
         loss_data=-model['loglikelihood'](rv)['outputs'],
-        loss_regularizer=model['kl_prior']  # or model['kl_prior']/model['n_data'], but annealing loss is anyway used with specific weights
+        loss_regularizer=model['kl_prior']
     )
 
 
@@ -199,9 +199,9 @@ Numericalize Postmaps
 
 
 def flat_numericalize_postmap(model, flat_key="flat", mode=None,
-                              annealing_combiner=None, mapreduce=None,
+                              annealing_combiner=None, mapreduce=None, wrapper=lambda f:f,
                               save_compiled_functions=True, initial_givens={}, adapt_init_params=lambda ps: ps,
-                              pre_compile={'num_loss': True, 'num_jacobian': False, 'num_hessian': False},
+                              pre_compile=None,
                               batch_size=None,
                               profile=False):
     """ postmap to offer an interface for standard numerical optimizer
@@ -211,13 +211,13 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
     Parameters
     ----------
     model : Model
-    annealing : bool
+    annealing_combiner : None or AnnealingCombiner
         indicating whether 'loss_data' and 'loss_regularizer' should be used (annealing=True) or 'loss' (default)
+    mapreduce : fmap
+        like wrapper, however this is only applied to loss_data, therefore the naming mapreduce
     wrapper : function f -> f where f function like used in scipy.optimize.minimize
-        wrappers like in schlichtanders.myoptimizers. E.g. batch, online, chunk...
-        or a composition of these
-    wrapper_kwargs : dict
-        extra kwargs for ``wrapper``
+        mainly intented for adding possibility to Average
+        is applied to any theano.function which is created (i.e. both data and regularizer for instance)
     save_compiled_functions : bool
         If false, functions are compiled on every postmap call anew. If true, they are hashed like in a usual DefaultDict
     initial_givens : dict TheanoVariable -> TheanoVariable
@@ -241,8 +241,12 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
     DefaultDict over model
     """
     assert (not isinstance(model[flat_key], Sequence)), "need single flat vector"
-    if pre_compile == "build_batch_theano_graph" and batch_size is None:
-        raise ValueError("Need batch_size for pre_compile_mode='build_batch_theano_graph'.")
+    if pre_compile is None:
+        pre_compile = {'num_loss': True, 'num_jacobian': False, 'num_hessian': False}
+    else:
+        for key, v in {'num_loss': True, 'num_jacobian': False, 'num_hessian': False}.iteritems():
+            if key not in pre_compile:
+                pre_compile[key] = v
 
     parameters = model[flat_key]
     derivatives = {
@@ -253,23 +257,24 @@ def flat_numericalize_postmap(model, flat_key="flat", mode=None,
     general_theano_kwargs = dict(on_unused_input="ignore", allow_input_downcast=True, profile=profile, mode=mode)
     def theano_function(*args, **kwargs):
         update(kwargs, general_theano_kwargs, overwrite=False)
-        return theano.function(*args, **kwargs)
+        return wrapper(theano.function(*args, **kwargs))
 
     def function(outputs, pre_compile):
         """ compiles function with signature f(params, *loss_inputs) """
-        if pre_compile == "build_batch_theano_graph":  # batch_size != None must be ensured (see ValueError above)
-            # TODO this pattern seems to be useful very very often, however compilation time is almost infinite (felt like that)
-            # TODO ask on theano, whether this pattern can be made more efficient
-            # build new loss_inputs with extra dimension (will be regarded as first dimension)
-            batch_loss_inputs = [T.TensorType(i.dtype, i.broadcastable + (False,))(i.name + ("" if i.name is None else "R"))
-                                for i in model['loss_inputs']]
-            def clones():
-                for i in xrange(batch_size):
-                    yield clone_renew_rng(outputs, replace=dict(izip(model['loss_inputs'], [a[i] for a in batch_loss_inputs])))
-            batch_outputs = T.add(*clones())
-            f = theano_function([parameters] + batch_loss_inputs, batch_outputs)
+        # error prone, therefore deprecated for now
+        # if pre_compile == "build_batch_theano_graph":  # batch_size != None must be ensured (see ValueError above)
+        #     # TODO this pattern seems to be useful very very often, however compilation time is almost infinite (felt like that)
+        #     # TODO ask on theano, whether this pattern can be made more efficient
+        #     # build new loss_inputs with extra dimension (will be regarded as first dimension)
+        #     batch_loss_inputs = [T.TensorType(i.dtype, i.broadcastable + (False,))(i.name + ("" if i.name is None else "R"))
+        #                         for i in model['loss_inputs']]
+        #     def clones():
+        #         for i in xrange(batch_size):
+        #             yield clone_renew_rng(outputs, replace=dict(izip(model['loss_inputs'], [a[i] for a in batch_loss_inputs])))
+        #     batch_outputs = T.add(*clones())
+        #     f = theano_function([parameters] + batch_loss_inputs, batch_outputs)
 
-        elif pre_compile and mapreduce is not None:
+        if pre_compile and mapreduce is not None:
             # we need to handle randomness per sample
             # using model['noise'] is confusing when using another rng in the background, as then the randomness occurs
             # before and hence can go into ``sub``
@@ -384,6 +389,7 @@ class AnnealingCombiner(object):
             ld = next(self.weights_data) * loss_data(parameters, *loss_inputs) / length['data']
             lr = next(self.weights_regularizer) * loss_regularizer(parameters) / length['regularizer']
             return ld + lr
+        annealed.wrapped = loss_data, loss_regularizer
         return annealed
 
 
