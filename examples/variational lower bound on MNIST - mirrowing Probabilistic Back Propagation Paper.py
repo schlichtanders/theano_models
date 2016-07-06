@@ -1,6 +1,7 @@
 # coding: utf-8
 from __future__ import division
 
+import os, platform
 import numpy as np
 from climin.util import optimizer
 from itertools import repeat, cycle, islice, izip
@@ -32,6 +33,14 @@ tm.inputting_references, tm.outputting_references
 from schlichtanders.myobjects import NestedNamespace
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
+__file__ = os.path.realpath(__file__)
+if platform.system() == "Windows":
+    from schlichtanders.myos import replace_unc
+    __file__ = replace_unc(__file__)
+__path__ = os.path.dirname(__file__)
+__parent__ = os.path.dirname(__path__)
+
+
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
 #     datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "winered", "yacht"]
@@ -52,8 +61,9 @@ X, VX, Z, VZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 20% vali
 
 # # Hyperparameters
 
-engine = create_engine('sqlite:///hyperparameters_several.db')
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'hyperparameters_several.db'))
 Base = declarative_base(bind=engine)
+
 
 class RandomHyper(Base):
     __tablename__ = datasetname
@@ -87,8 +97,7 @@ class RandomHyper(Base):
     baseline_train_loss = Column(PickleType)
     baseline_val_loss = Column(PickleType)
 
-
-def __init__(self):
+    def __init__(self):
         self.datasetname = datasetname
         # hyper parameters:
         self.max_epochs_without_improvement = 30
@@ -134,6 +143,8 @@ sql_session = Session()
 
 
 
+# Main Loop
+# =========
 
 while True:
     hyper = RandomHyper()

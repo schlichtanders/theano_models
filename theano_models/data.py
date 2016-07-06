@@ -1,6 +1,14 @@
 import numpy as np
-
 from sklearn import cross_validation
+import platform
+import os
+
+__file__ = os.path.realpath(__file__)
+if platform.system() == "Windows":
+    from schlichtanders.myos import replace_unc
+    __file__ = replace_unc(__file__)
+__path__ = os.path.dirname(__file__)
+__parent__ = os.path.dirname(__path__)
 
 
 def toy(random_state, n=20, noise=9):
@@ -20,13 +28,13 @@ def toy(random_state, n=20, noise=9):
 
 
 def _boston():
-    D = np.loadtxt('../data/bostonhousing/housing.data').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__,'data','bostonhousing','housing.data')).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return Z, X
 
 def boston(random_state):
-    D = np.loadtxt('../data/bostonhousing/housing.data').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'bostonhousing', 'housing.data')).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     Z -= Z.mean(axis=0)
@@ -36,14 +44,14 @@ def boston(random_state):
 
 
 def _concrete():
-    D = np.loadtxt('../data/concrete/concrete.csv', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'concrete', 'concrete.csv'), delimiter=','
                    ).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return Z, X
 
 def concrete(random_state):
-    D = np.loadtxt('../data/concrete/concrete.csv', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data','concrete','concrete.csv'), delimiter=','
                    ).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
@@ -53,14 +61,14 @@ def concrete(random_state):
                                              random_state=random_state)
 
 def _energy():
-    D = np.loadtxt('../data/energy/energy.csv', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'energy', 'energy.csv'), delimiter=','
                    ).astype('float32')
     X = D[:, :-2]
     Z = D[:, -2:-1]
     return Z, X
 
 def energy(random_state):
-    D = np.loadtxt('../data/energy/energy.csv', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'energy', 'energy.csv'), delimiter=','
                    ).astype('float32')
     X = D[:, :-2]
     Z = D[:, -2:-1]
@@ -71,14 +79,14 @@ def energy(random_state):
 
 
 def _kin8nm():
-    D = np.loadtxt('../data/kin8nm/regression-datasets-kin8nm.csv',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'kin8nm', 'regression-datasets-kin8nm.csv'),
                    delimiter=',').astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return Z, X
 
 def kin8nm(random_state):
-    D = np.loadtxt('../data/kin8nm/regression-datasets-kin8nm.csv',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'kin8nm', 'regression-datasets-kin8nm.csv'),
                    delimiter=',').astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
@@ -89,13 +97,13 @@ def kin8nm(random_state):
 
 
 def _yacht():
-    D = np.loadtxt('../data/yacht/yacht_hydrodynamics.data').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'yacht', 'yacht_hydrodynamics.data')).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return Z, X
 
 def yacht(random_state):
-    D = np.loadtxt('../data/yacht/yacht_hydrodynamics.data').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'yacht', 'yacht_hydrodynamics.data')).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     Z -= Z.mean(axis=0)
@@ -104,13 +112,13 @@ def yacht(random_state):
                                              random_state=random_state)
 
 def _naval():
-    D = np.loadtxt('../data/naval/data.txt').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'naval', 'data.txt')).astype('float32')
     X = D[:, :-2]
     Z = D[:, -2:-1]
     return Z,X
 
 def naval(random_state):
-    D = np.loadtxt('../data/naval/data.txt').astype('float32')
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'naval', 'data.txt')).astype('float32')
     X = D[:, :-2]
     Z = D[:, -2:-1]
     Z -= Z.mean(axis=0)
@@ -121,14 +129,14 @@ def naval(random_state):
 
 
 def _powerplant():
-    D = np.loadtxt('../data/powerplant/powerplant.csv', delimiter=',',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'powerplant', 'powerplant.csv'), delimiter=',',
                    skiprows=1).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return X, Z
 
 def powerplant(random_state):
-    D = np.loadtxt('../data/powerplant/powerplant.csv', delimiter=',',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'powerplant', 'powerplant.csv'), delimiter=',',
                    skiprows=1).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
@@ -139,14 +147,14 @@ def powerplant(random_state):
 
 
 def _winered():
-    D = np.loadtxt('../data/winered/winequality-red.csv', delimiter=';',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'winered', 'winequality-red.csv'), delimiter=';',
                    skiprows=1).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
     return Z, X
 
 def winered(random_state):
-    D = np.loadtxt('../data/winered/winequality-red.csv', delimiter=';',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'winered', 'winequality-red.csv'), delimiter=';',
                    skiprows=1).astype('float32')
     X = D[:, :-1]
     Z = D[:, -1:]
@@ -157,14 +165,14 @@ def winered(random_state):
 
 
 def _protein():
-    D = np.loadtxt('../data/protein/CASP.csv', delimiter=',',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'protein', 'CASP.csv'), delimiter=',',
                    skiprows=1).astype('float32')
     X = D[:, 1:]
     Z = D[:, :1]
     return X, Z
 
 def protein(random_state):
-    D = np.loadtxt('../data/protein/CASP.csv', delimiter=',',
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'protein', 'CASP.csv'), delimiter=',',
                    skiprows=1).astype('float32')
     X = D[:, 1:]
     Z = D[:, :1]
@@ -175,11 +183,11 @@ def protein(random_state):
 
 
 def jura():
-    D = np.loadtxt('../data/jura/prediction.dat', skiprows=13)
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'jura', 'prediction.dat'), skiprows=13)
     X = D[:, (0, 1, 8, 10)]
     Z = D[:, 4:5]
 
-    D = np.loadtxt('../data/jura/validation.dat', skiprows=13)
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'jura', 'prediction.dat'), skiprows=13)
     TX = D[:, (0, 1, 8, 10)]
     TZ = D[:, 4:5]
 
@@ -196,14 +204,14 @@ def jura():
 
 
 def _year():
-    D = np.loadtxt('../data/year/YearPredictionMSD.txt', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'year', 'YearPredictionMSD.txt'), delimiter=','
                    ).astype('float32')
     X = D[:, 1:]
     Z = D[:, :1]
     return X, Z
 
 def year():
-    D = np.loadtxt('../data/year/YearPredictionMSD.txt', delimiter=','
+    D = np.loadtxt(os.path.join(__parent__, 'data', 'year', 'YearPredictionMSD.txt'), delimiter=','
                    ).astype('float32')
     X = D[:463715, 1:]
     Z = D[:463715, :1]
