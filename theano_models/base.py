@@ -183,10 +183,10 @@ class Model(MutableMapping):
             Model.all_models.append(cp)
         return cp
 
-    def function(self, *args, **kwargs):
+    def function(self, **kwargs):
         if 'on_unused_input' not in kwargs:
             kwargs['on_unused_input'] = "warn"
-        return theano.function(self['inputs'], self['outputs'], *args, **kwargs)
+        return theano.function(self['inputs'], self['outputs'], **kwargs)
 
     # Substitution Interface
     # ----------------------
@@ -360,9 +360,9 @@ class Merge(Model):
         ignore_references : list of str or None
             opposite of keep_references
         other_references : None, str, gof.Variables, list of gof.Variables
-            if is None, then the respective key is deleted and replaced by empty list []
-            if keywordarg="str" then the reference is understood as a renaming  new_key=old_key
-            other references are simply combined with old references
+            if is None, then the respective key is deleted
+            elif keywordarg="str" then the reference is understood as a renaming  new_key=old_key (appending if already existent)
+            else the old references gets REPLACED by this new reference
         """
         convert_singletons_to_list = other_references.pop("convert_singletons_to_list", False)
         keep_references = other_references.pop("keep_references", None)
@@ -409,7 +409,6 @@ class Merge(Model):
             if other_references[key] is None:
                 with ignored(KeyError):
                     del merge[key]
-                    merge[key] = []
 
             elif isinstance(other_references[key], basestring):
                 new_key = other_references[key]
@@ -428,11 +427,10 @@ class Merge(Model):
                 # # else nothing happens as subgraphs come before other_references (by syntax)
                 # del merge[old_key]
             else:
-                if key not in merge:
-                    merge[key] = other_references[key]
-                elif isinstance(merge[key], list) or convert_singletons_to_list:
-                    merge[key] = convert(merge[key], list) + convert(other_references[key], list)
-                # else nothing happens as subgraphs come before other_references (by syntax)
+                with ignored(KeyError):
+                    # in case merge becomes Model during code development, this could be a severe bug source
+                    del merge[key]
+                merge[key] = other_references[key]
 
         # remove all duplicates if any
         for v in merge.values():
@@ -629,123 +627,3 @@ class Flatten(Model):
             flat_key: flat,
             'outputs': parameters,
         })
-
-
-"""
-Core Decorators
-===============
-to easily track functions as Models (e.g. for visualization)
-"""
-
-
-@wrapt.decorator
-def as_model(wrapped, instance, args, kwargs):
-    """ function wrapper which tracks each function execution as a Model
-
-    with inputs, outputs set to the function's arguments / return values
-
-    Parameters
-    ----------
-    name : str
-        see Model, defaults to ``wrapped.func_name``
-    everything else see Model
-
-    Returns
-    -------
-    decorated function which returns the respective model.
-    Combine it with ``model_to_output`` or use ``track_model`` directly to return the function output instead.
-    """
-    outputs = wrapped(*args, **kwargs)
-    if isinstance(outputs, types.GeneratorType):
-        outputs = list(outputs)
-
-    return Model(
-        name=wrapped.func_name,
-        inputs=remove_duplicates(deepflatten_keep_vars(args)),
-        outputs=outputs
-    )
-
-@wrapt.decorator
-def track_model(wrapped, instance, args, kwargs):
-    """ like ``as_model``, however the decorated functions returns its normal output instead of the respective model
-
-    it is nevertheless tracked """
-    outputs = wrapped(*args, **kwargs)
-    if isinstance(outputs, types.GeneratorType):
-        outputs = list(outputs)
-
-    Model(
-        name=wrapped.func_name,
-        inputs=remove_duplicates(deepflatten_keep_vars(args)),
-        outputs=outputs
-    )
-    return outputs
-
-
-def as_merge(*merge_subgraphs, **merge_kwargs):
-    """ Decorates a function to be listed as a Model
-    Thereby the Model defined by the given Merge parameters is adapted by the function {inputs:..., outpupts:...}
-    dictionary to create and list a new Model
-
-    Parameters
-    ----------
-    track : bool
-        see Merge, defaults to True
-    name : str
-        see Merge, defaults to concatination of first given ``subgraph.name`` with ``wrapped.func_name``
-    everything else see Merge
-
-    Returns
-    -------
-    decorated function which returns the respective Model instead of the output.
-    Combine it with ``model_to_output`` or use ``track_merge`` directly to return the function output instead.
-    """
-    track = merge_kwargs.pop('track', True)
-    def decorator(wrapped):
-        name = merge_kwargs.pop('name', None)
-        if name is None:
-            try:
-                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
-            except StopIteration:
-                name = ""
-            name += wrapped.func_name
-
-        @wraps(wrapped)
-        def wrapper(*args, **kwargs):
-            outputs = wrapped(*args, **kwargs)
-            if isinstance(outputs, types.GeneratorType):
-                outputs = list(outputs)
-            return Merge(*merge_subgraphs,
-                  name=name, track=track,
-                  inputs=list(args), outputs=outputs,
-                  **merge_kwargs)
-        return wrapper
-    return decorator
-
-
-def track_merge(*merge_subgraphs, **merge_kwargs):
-    """ like ``as_merge``, however the decorated functions returns its normal output instead of the respective model
-
-    it is nevertheless tracked """
-    track = merge_kwargs.pop('track', True)
-    def decorator(wrapped):
-        name = merge_kwargs.pop('name', None)
-        if name is None:
-            try:
-                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
-            except StopIteration:
-                name = ""
-            name += wrapped.func_name
-
-        @wraps(wrapped)
-        def wrapper(*args, **kwargs):
-            outputs = wrapped(*args, **kwargs)
-            if isinstance(outputs, types.GeneratorType):
-                outputs = list(outputs)
-            Merge(*merge_subgraphs,
-                  name=name, track=track,
-                  inputs=list(args), outputs=outputs,
-                  **merge_kwargs)
-            return outputs
-        return wrapper
-    return decorator

@@ -12,7 +12,8 @@ from theano import config
 from theano.tensor.shared_randomstreams import RandomStreams
 from theano.printing import Print
 
-from base import Model, Merge, as_merge, models_as_outputs, inputting_references, outputting_references
+from base import Model, Merge, models_as_outputs, inputting_references, outputting_references
+from base_tools import as_merge
 from schlichtanders.mydicts import update
 from util import as_tensor_variable, U
 from itertools import izip
@@ -136,6 +137,7 @@ Noise Models
 ------------
 """
 
+# TODO rebuild all logP to accept multiple valued RV !
 
 class GaussianNoise(Model):
     """Class representing a Gaussian with diagnonal covariance matrix.
@@ -553,10 +555,9 @@ class Mixture(Merge):
         outputs_all = T.stack([pm['outputs'] for pm in prob_models])
         outputs = outputs_all[outputs_idx]
 
-        super(Mixture, self).__init__(*prob_models, ignore_references={'outputs'}, track=True,
-            outputs=outputs,
-            parameters_psumto1=[self.mixture_probs]
-        )
+        this = dict(parameters_psumto1=[self.mixture_probs],
+                    outputs=outputs)
+        super(Mixture, self).__init__(this, *prob_models, track=True)
 
         # logP
         # ----

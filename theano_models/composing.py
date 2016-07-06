@@ -10,10 +10,10 @@ from schlichtanders.myfunctools import convert
 from schlichtanders.mylists import return_list, as_list
 from theano import gof
 import theano.tensor as T
-from base import Model, Merge, as_merge, models_as_outputs, inputting_references, outputting_references
+from base import Model, Merge, models_as_outputs, inputting_references, outputting_references
 from collections import Sequence
 
-from base_tools import total_size
+from base_tools import total_size, as_merge
 from util import as_tensor_variable, shallowflatten_keep_vars
 from numbers import Number
 

@@ -20,10 +20,130 @@ from theano.gof.graph import Variable
 from theano.compile import Function
 
 from schlichtanders.myfunctools import convert
-from base import Model, Merge, track_model, as_merge, get_inputting_references, get_outputting_references
+from base import Model, Merge, get_inputting_references, get_outputting_references
 from util import as_tensor_variable, clone, deepflatten_keep_vars
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
+
+
+"""
+Core Decorators
+===============
+to easily track functions as Models (e.g. for visualization)
+"""
+
+
+@wrapt.decorator
+def as_model(wrapped, instance, args, kwargs):
+    """ function wrapper which tracks each function execution as a Model
+
+    with inputs, outputs set to the function's arguments / return values
+
+    Parameters
+    ----------
+    name : str
+        see Model, defaults to ``wrapped.func_name``
+    everything else see Model
+
+    Returns
+    -------
+    decorated function which returns the respective model.
+    Combine it with ``model_to_output`` or use ``track_model`` directly to return the function output instead.
+    """
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+
+    return Model(
+        name=wrapped.func_name,
+        inputs=remove_duplicates(deepflatten_keep_vars(args)),
+        outputs=outputs
+    )
+
+@wrapt.decorator
+def track_model(wrapped, instance, args, kwargs):
+    """ like ``as_model``, however the decorated functions returns its normal output instead of the respective model
+
+    it is nevertheless tracked """
+    outputs = wrapped(*args, **kwargs)
+    if isinstance(outputs, types.GeneratorType):
+        outputs = list(outputs)
+
+    Model(
+        name=wrapped.func_name,
+        inputs=remove_duplicates(deepflatten_keep_vars(args)),
+        outputs=outputs
+    )
+    return outputs
+
+
+def as_merge(*merge_subgraphs, **merge_kwargs):
+    """ Decorates a function to be listed as a Model
+    Thereby the Model defined by the given Merge parameters is adapted by the function {inputs:..., outpupts:...}
+    dictionary to create and list a new Model
+
+    Parameters
+    ----------
+    track : bool
+        see Merge, defaults to True
+    name : str
+        see Merge, defaults to concatination of first given ``subgraph.name`` with ``wrapped.func_name``
+    everything else see Merge
+
+    Returns
+    -------
+    decorated function which returns the respective Model instead of the output.
+    Combine it with ``model_to_output`` or use ``track_merge`` directly to return the function output instead.
+    """
+    track = merge_kwargs.pop('track', True)
+    def decorator(wrapped):
+        name = merge_kwargs.pop('name', None)
+        if name is None:
+            try:
+                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
+            except StopIteration:
+                name = ""
+            name += wrapped.func_name
+
+        @wraps(wrapped)
+        def wrapper(*args, **kwargs):
+            outputs = wrapped(*args, **kwargs)
+            if isinstance(outputs, types.GeneratorType):
+                outputs = list(outputs)
+            return Merge(*merge_subgraphs,
+                  name=name, track=track,
+                  inputs=list(args), outputs=outputs,
+                  **merge_kwargs)
+        return wrapper
+    return decorator
+
+
+def track_merge(*merge_subgraphs, **merge_kwargs):
+    """ like ``as_merge``, however the decorated functions returns its normal output instead of the respective model
+
+    it is nevertheless tracked """
+    track = merge_kwargs.pop('track', True)
+    def decorator(wrapped):
+        name = merge_kwargs.pop('name', None)
+        if name is None:
+            try:
+                name = next(sg.name + '.' for sg in merge_subgraphs if hasattr(sg, 'name'))
+            except StopIteration:
+                name = ""
+            name += wrapped.func_name
+
+        @wraps(wrapped)
+        def wrapper(*args, **kwargs):
+            outputs = wrapped(*args, **kwargs)
+            if isinstance(outputs, types.GeneratorType):
+                outputs = list(outputs)
+            Merge(*merge_subgraphs,
+                  name=name, track=track,
+                  inputs=list(args), outputs=outputs,
+                  **merge_kwargs)
+            return outputs
+        return wrapper
+    return decorator
 
 
 """

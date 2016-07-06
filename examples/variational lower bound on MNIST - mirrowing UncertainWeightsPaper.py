@@ -21,7 +21,7 @@ from theano_models.tools import (as_tensor_variable, total_size, clone, clone_al
                                  get_profile, squareplus, squareplus_inv, softplus, softplus_inv)
 import theano_models.deterministic_models as dm
 import theano_models.probabilistic_models as pm
-import theano_models.postmaps as post
+import theano_models.loss as post
 from theano_models.composing import normalizing_flow, variational_bayes
 
 from theano.tensor.shared_randomstreams import RandomStreams
@@ -180,7 +180,7 @@ targets = Merge(target_distribution, predictor,
 # -------------------
 tsize = total_size(targets['to_be_randomized'])
 params_base = pm.Gauss(output_size=tsize)  # normalizing flow paper uses same variance everywhere
-params_base = Merge(params_base, parameters=None)  # leave mean to zero because of planar flows
+params_base = Merge(params_base, parameters=[])  # leave mean to zero because of planar flows
 normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]
 
 params = params_base
@@ -202,7 +202,7 @@ g2 = pm.Gauss(total_size(targets['to_be_randomized']), init_var=np.exp(-2* hyper
 prior = pm.Mixture(g1, g2, mixture_probs=[hyper.pi, 1-hyper.pi])
 # label hyper parameters accordingly
 prior = Merge(prior,
-              parameters=None, # mean is not adapted at all, but left centred at zero
+              parameters=[], # mean is not adapted at all, but left centred at zero
               parameters_positive='hyperparameters_positive',
               parameters_psumto1='hyperparameters_psumto1')
 model = variational_bayes(targets, 'to_be_randomized', params, priors=prior)
@@ -229,7 +229,7 @@ mapreduce = getattr(myfunctools, hyper.mapreduce)
 if hyper.average_n > 1:
     mapreduce = compose_fmap(Average(hyper.average_n), mapreduce)
 
-postmap = compose(post.flat_numericalize_postmap, post.variational_postmap)
+postmap = compose(post.numericalize, post.loss_variational)
 postmap_kwargs = {
     'mapreduce': mapreduce,  # TODO add more functionality for composed fmaps, with args
     'annealing_combiner': post.AnnealingCombiner(
@@ -239,7 +239,7 @@ postmap_kwargs = {
     'mode': 'FAST_RUN'
 }
 optimizer_kwargs = postmap(model, **postmap_kwargs)
-climin_kwargs = post.climin_postmap(optimizer_kwargs)
+climin_kwargs = post.climin_kwargs(optimizer_kwargs)
 
 opt = optimizer(
     identifier=hyper.opt_identifier,

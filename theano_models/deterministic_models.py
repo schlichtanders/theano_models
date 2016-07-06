@@ -97,8 +97,10 @@ class AffineNonlinear(Model):
         # input needs to be vector
         if input is None:
             input = T.vector()
-        if not hasattr(input, 'type') or input.type.broadcastable != (False,):
-            raise ValueError("Need singleton input vector.")
+        elif isinstance(input, Sequence):
+            raise ValueError("Need single input variable.")
+        else:
+            input = as_tensor_variable(input)
 
         try:
             self.transfer = getattr(_transfer, transfer)
@@ -124,8 +126,10 @@ class Mlp(Model):
     def __init__(self, hidden_sizes, output_size, hidden_transfers, output_transfer, input=None):
         if input is None:
             input = T.vector()
-        if not hasattr(input, 'type') or input.type.broadcastable != (False,):
-            raise ValueError("Need singleton input vector.")
+        elif isinstance(input, Sequence):
+            raise ValueError("Need single input variable.")
+        else:
+            input = as_tensor_variable(input)
 
         self.layers = []
 
