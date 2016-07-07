@@ -1,7 +1,7 @@
 # coding: utf-8
 from __future__ import division
 
-import os, platform, sys
+import os, platform, sys, traceback
 from pprint import pformat, pprint
 import numpy as np
 from climin.util import optimizer
@@ -159,8 +159,8 @@ sql_session = Session()
 
 # Main Loop
 # =========
-try:
-    while True:
+while True:
+    try:
         hyper = RandomHyper()
         sql_session.add(hyper)
         pprint(hyper.__dict__)
@@ -438,5 +438,10 @@ try:
 
         sql_session.commit()  # this updates all set information within sqlite database
 
-except Exception as e:
-    raise Exception, "LAST HYPER: %s\nORIGINAL ERROR: %s" % (pformat(hyper.__dict__), e), sys.exc_info()[2]
+    except Exception as e:
+        with open(os.path.join(__path__, 'hyperparameters2%s_errors.txt' % suffix), "a") as myfile:
+            error = """
+LAST HYPER: %s
+ORIGINAL ERROR: %s
+""" % (pformat(hyper.__dict__), traceback.format_exc())
+            myfile.write(error)
