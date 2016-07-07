@@ -2,6 +2,7 @@
 from __future__ import division
 
 import os, platform, sys
+from pprint import pformat, pprint
 import numpy as np
 from climin.util import optimizer
 from itertools import repeat, cycle, islice, izip
@@ -158,281 +159,284 @@ sql_session = Session()
 
 # Main Loop
 # =========
+try:
+    while True:
+        hyper = RandomHyper()
+        sql_session.add(hyper)
+        pprint(hyper.__dict__)
+        # reset hard the saved models:
+        dm.InvertibleModel.INVERTIBLE_MODELS = []
+        tm.Model.all_models = []
+
+
+        # Model Normalizing flow
+        # ======================
+
+        # this is extremely useful to tell everything the default sizes
+        input = tm.as_tensor_variable(X[0], name="X")
+
+        predictor = dm.Mlp(
+            input=input,
+            output_size=Z.shape[1],
+            output_transfer='identity',
+            hidden_sizes=[hyper.units_per_layer]*1,
+            hidden_transfers=["rectifier"]*1
+        )
+        target_distribution = pm.DiagGaussianNoise(predictor)
+        targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+
+        params_base = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),)))
+        normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)] + [dm.LocScaleTransform()]
+        # LocScaleTransform for better working with PlanarTransforms
+        params = params_base
+        for transform in normflows:
+            params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
+
+        prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2* hyper.minus_log_s))
+        prior = tm.fix_params(prior)
+        model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+
+        _model = model
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
+
+
+        # # Optimizer
+
+        loss = tm.loss_variational(_model)
+        tm.reduce_all_identities()
+
+        n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
+
+        def weights_regularizer_1epoch():
+            for i in range(1, n_batches+1):
+                yield 2**(n_batches - i) / (2**n_batches - 1)
+
+        assert len(list(weights_regularizer_1epoch())) == n_batches
+
+        optimizer_kwargs = tm.numericalize(loss, _model['flat'],
+            batch_mapreduce=summap,
+            annealing_combiner=tm.AnnealingCombiner(
+                weights_regularizer=cycle(weights_regularizer_1epoch())
+            ),
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
+        #     profile=True,
+        #     mode='FAST_COMPILE',
+        )
+
+        opt = optimizer(
+            identifier=hyper.opt_identifier,
+            step_rate=hyper.opt_step_rate,
+            momentum=hyper.opt_momentum,
+            decay=hyper.opt_decay,
+            offset=hyper.opt_offset,
+            args=climin_args,
+            **tm.climin_kwargs(optimizer_kwargs)
+        )
+
+
+        # start values:
+        hyper.best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+
+        last_improvement_epoch = 0
+        for info in every(n_batches, opt):
+            current_epoch = info['n_iter']//n_batches
+            if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
+                break
+            # collect and visualize validation loss for choosing the best model
+            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+            if val_loss < hyper.best_val_loss:
+                last_improvement_epoch = current_epoch
+                hyper.best_parameters = opt.wrt
+                hyper.best_val_loss = val_loss
+            hyper.val_loss.append(val_loss)
+
+            # visualize training loss for comparison:
+            training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
+            hyper.train_loss.append(training_loss)
+
+        sql_session.commit()  # this updates all set information within sqlite database
+
+
+
+        # Model Normalizing flow 2
+        # ==========================
+
+        # this is extremely useful to tell everything the default sizes
+        input = tm.as_tensor_variable(X[0], name="X")
+
+        predictor = dm.Mlp(
+            input=input,
+            output_size=Z.shape[1],
+            output_transfer='identity',
+            hidden_sizes=[hyper.units_per_layer] * 1,
+            hidden_transfers=["rectifier"] * 1
+        )
+        target_distribution = pm.DiagGaussianNoise(predictor)
+        targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+
+        params_base = pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),))
+        normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
+        # LocScaleTransform for better working with PlanarTransforms
+        params = params_base
+        for transform in normflows:
+            params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
+
+        prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2 * hyper.minus_log_s))
+        prior = tm.fix_params(prior)
+        model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+
+        _model = model
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
 
-while True:
-    hyper = RandomHyper()
-    sql_session.add(hyper)
-    print hyper.__dict__
-    # reset hard the saved models:
-    dm.InvertibleModel.INVERTIBLE_MODELS = []
-    tm.Model.all_models = []
-
-
-    # Model Normalizing flow
-    # ======================
-
-    # this is extremely useful to tell everything the default sizes
-    input = tm.as_tensor_variable(X[0], name="X")
-
-    predictor = dm.Mlp(
-        input=input,
-        output_size=Z.shape[1],
-        output_transfer='identity',
-        hidden_sizes=[hyper.units_per_layer]*1,
-        hidden_transfers=["rectifier"]*1
-    )
-    target_distribution = pm.DiagGaussianNoise(predictor)
-    targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
-
-    params_base = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),)))
-    normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)] + [dm.LocScaleTransform()]
-    # LocScaleTransform for better working with PlanarTransforms
-    params = params_base
-    for transform in normflows:
-        params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
-
-    prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2* hyper.minus_log_s))
-    prior = tm.fix_params(prior)
-    model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-
-    _model = model
-    _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-    _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-
-
-    # # Optimizer
-
-    loss = tm.loss_variational(_model)
-    tm.reduce_all_identities()
-
-    n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
-
-    def weights_regularizer_1epoch():
-        for i in range(1, n_batches+1):
-            yield 2**(n_batches - i) / (2**n_batches - 1)
-
-    assert len(list(weights_regularizer_1epoch())) == n_batches
-
-    optimizer_kwargs = tm.numericalize(loss, _model['flat'],
-        batch_mapreduce=summap,
-        annealing_combiner=tm.AnnealingCombiner(
-            weights_regularizer=cycle(weights_regularizer_1epoch())
-        ),
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
-    #     profile=True,
-    #     mode='FAST_COMPILE',
-    )
-
-    opt = optimizer(
-        identifier=hyper.opt_identifier,
-        step_rate=hyper.opt_step_rate,
-        momentum=hyper.opt_momentum,
-        decay=hyper.opt_decay,
-        offset=hyper.opt_offset,
-        args=climin_args,
-        **tm.climin_kwargs(optimizer_kwargs)
-    )
-
-
-    # start values:
-    hyper.best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-
-    last_improvement_epoch = 0
-    for info in every(n_batches, opt):
-        current_epoch = info['n_iter']//n_batches
-        if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
-            break
-        # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-        if val_loss < hyper.best_val_loss:
-            last_improvement_epoch = current_epoch
-            hyper.best_parameters = opt.wrt
-            hyper.best_val_loss = val_loss
-        hyper.val_loss.append(val_loss)
-
-        # visualize training loss for comparison:
-        training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-        hyper.train_loss.append(training_loss)
-
-    sql_session.commit()  # this updates all set information within sqlite database
-
-
-
-    # Model Normalizing flow 2
-    # ==========================
-
-    # this is extremely useful to tell everything the default sizes
-    input = tm.as_tensor_variable(X[0], name="X")
-
-    predictor = dm.Mlp(
-        input=input,
-        output_size=Z.shape[1],
-        output_transfer='identity',
-        hidden_sizes=[hyper.units_per_layer] * 1,
-        hidden_transfers=["rectifier"] * 1
-    )
-    target_distribution = pm.DiagGaussianNoise(predictor)
-    targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
-
-    params_base = pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),))
-    normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
-    # LocScaleTransform for better working with PlanarTransforms
-    params = params_base
-    for transform in normflows:
-        params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
-
-    prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2 * hyper.minus_log_s))
-    prior = tm.fix_params(prior)
-    model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-
-    _model = model
-    _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-    _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
+        # # Optimizer
 
-    # # Optimizer
+        loss = tm.loss_variational(_model)
+        tm.reduce_all_identities()
 
-    loss = tm.loss_variational(_model)
-    tm.reduce_all_identities()
+        n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
-    n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
+        def weights_regularizer_1epoch():
+            for i in range(1, n_batches + 1):
+                yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
 
-    def weights_regularizer_1epoch():
-        for i in range(1, n_batches + 1):
-            yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
+
+        assert len(list(weights_regularizer_1epoch())) == n_batches
 
-
-    assert len(list(weights_regularizer_1epoch())) == n_batches
-
-    optimizer_kwargs = tm.numericalize(loss, _model['flat'],
-        batch_mapreduce=summap,
-        annealing_combiner=tm.AnnealingCombiner(
-           weights_regularizer=cycle(weights_regularizer_1epoch())
-        ),
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
-    #     profile=True,
-    #     mode='FAST_COMPILE',
-    )
-
-    opt = optimizer(
-        identifier=hyper.opt_identifier,
-        step_rate=hyper.opt_step_rate,
-        momentum=hyper.opt_momentum,
-        decay=hyper.opt_decay,
-        offset=hyper.opt_offset,
-        args=climin_args,
-        **tm.climin_kwargs(optimizer_kwargs)
-    )
-
-    # start values:
-    hyper.alternative_best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-
-    last_improvement_epoch = 0
-    for info in every(n_batches, opt):
-        current_epoch = info['n_iter'] // n_batches
-        if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
-            break
-        # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-        if val_loss < hyper.alternative_best_val_loss:
-            last_improvement_epoch = current_epoch
-            hyper.alternative_best_parameters = opt.wrt
-            hyper.alternative_best_val_loss = val_loss
-        hyper.alternative_val_loss.append(val_loss)
-
-        # visualize training loss for comparison:
-        training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-        hyper.alternative_train_loss.append(training_loss)
-
-    sql_session.commit()  # this updates all set information within sqlite database
-
-
-
-
-    # baseline run - WITHOUT normalizing flow
-    # =======================================
-
-    # this is extremely useful to tell everything the default sizes
-    input = tm.as_tensor_variable(X[0], name="X")
-
-    predictor = dm.Mlp(
-        input=input,
-        output_size=Z.shape[1],
-        output_transfer='identity',
-        hidden_sizes=[hyper.units_per_layer] * 1,
-        hidden_transfers=["rectifier"] * 1
-    )
-    target_distribution = pm.DiagGaussianNoise(predictor)
-    targets = tm.Merge(target_distribution, predictor,
-                       tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
-
-    params = pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),))
-
-    prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2 * hyper.minus_log_s))
-    prior = tm.fix_params(prior)
-    model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-
-    _model = model
-    _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-    _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-
-    # # Optimizer
-
-    loss = tm.loss_variational(_model)
-    tm.reduce_all_identities()
-
-    n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
-
-
-    def weights_regularizer_1epoch():
-        for i in range(1, n_batches + 1):
-            yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
-
-
-    assert len(list(weights_regularizer_1epoch())) == n_batches
-
-    optimizer_kwargs = tm.numericalize(loss, _model['flat'],
-        batch_mapreduce=summap,
-        annealing_combiner=tm.AnnealingCombiner(
-           weights_regularizer=cycle(weights_regularizer_1epoch())
-        ),
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
-    #     profile=True,
-    #     mode='FAST_COMPILE',
-    )
-
-    opt = optimizer(
-        identifier=hyper.opt_identifier,
-        step_rate=hyper.opt_step_rate,
-        momentum=hyper.opt_momentum,
-        decay=hyper.opt_decay,
-        offset=hyper.opt_offset,
-
-        args=climin_args,
-        **tm.climin_kwargs(optimizer_kwargs)
-    )
-
-    # start values:
-    hyper.baseline_best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-
-    last_improvement_epoch = 0
-    for info in every(n_batches, opt):
-        current_epoch = info['n_iter'] // n_batches
-        if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
-            break
-        # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-        if val_loss < hyper.baseline_best_val_loss:
-            last_improvement_epoch = current_epoch
-            hyper.baseline_best_parameters = opt.wrt
-            hyper.baseline_best_val_loss = val_loss
-        hyper.baseline_val_loss.append(val_loss)
-
-        # visualize training loss for comparison:
-        training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-        hyper.baseline_train_loss.append(training_loss)
-
-    sql_session.commit()  # this updates all set information within sqlite database
+        optimizer_kwargs = tm.numericalize(loss, _model['flat'],
+            batch_mapreduce=summap,
+            annealing_combiner=tm.AnnealingCombiner(
+               weights_regularizer=cycle(weights_regularizer_1epoch())
+            ),
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
+        #     profile=True,
+        #     mode='FAST_COMPILE',
+        )
+
+        opt = optimizer(
+            identifier=hyper.opt_identifier,
+            step_rate=hyper.opt_step_rate,
+            momentum=hyper.opt_momentum,
+            decay=hyper.opt_decay,
+            offset=hyper.opt_offset,
+            args=climin_args,
+            **tm.climin_kwargs(optimizer_kwargs)
+        )
+
+        # start values:
+        hyper.alternative_best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+
+        last_improvement_epoch = 0
+        for info in every(n_batches, opt):
+            current_epoch = info['n_iter'] // n_batches
+            if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
+                break
+            # collect and visualize validation loss for choosing the best model
+            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+            if val_loss < hyper.alternative_best_val_loss:
+                last_improvement_epoch = current_epoch
+                hyper.alternative_best_parameters = opt.wrt
+                hyper.alternative_best_val_loss = val_loss
+            hyper.alternative_val_loss.append(val_loss)
+
+            # visualize training loss for comparison:
+            training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
+            hyper.alternative_train_loss.append(training_loss)
+
+        sql_session.commit()  # this updates all set information within sqlite database
+
+
+
+
+        # baseline run - WITHOUT normalizing flow
+        # =======================================
+
+        # this is extremely useful to tell everything the default sizes
+        input = tm.as_tensor_variable(X[0], name="X")
+
+        predictor = dm.Mlp(
+            input=input,
+            output_size=Z.shape[1],
+            output_transfer='identity',
+            hidden_sizes=[hyper.units_per_layer] * 1,
+            hidden_transfers=["rectifier"] * 1
+        )
+        target_distribution = pm.DiagGaussianNoise(predictor)
+        targets = tm.Merge(target_distribution, predictor,
+                           tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+
+        params = pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),))
+
+        prior = pm.Gauss(tm.total_size(targets['to_be_randomized']), init_var=np.exp(-2 * hyper.minus_log_s))
+        prior = tm.fix_params(prior)
+        model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+
+        _model = model
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
+
+        # # Optimizer
+
+        loss = tm.loss_variational(_model)
+        tm.reduce_all_identities()
+
+        n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
+
+
+        def weights_regularizer_1epoch():
+            for i in range(1, n_batches + 1):
+                yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
+
+
+        assert len(list(weights_regularizer_1epoch())) == n_batches
+
+        optimizer_kwargs = tm.numericalize(loss, _model['flat'],
+            batch_mapreduce=summap,
+            annealing_combiner=tm.AnnealingCombiner(
+               weights_regularizer=cycle(weights_regularizer_1epoch())
+            ),
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.01),
+        #     profile=True,
+        #     mode='FAST_COMPILE',
+        )
+
+        opt = optimizer(
+            identifier=hyper.opt_identifier,
+            step_rate=hyper.opt_step_rate,
+            momentum=hyper.opt_momentum,
+            decay=hyper.opt_decay,
+            offset=hyper.opt_offset,
+
+            args=climin_args,
+            **tm.climin_kwargs(optimizer_kwargs)
+        )
+
+        # start values:
+        hyper.baseline_best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+
+        last_improvement_epoch = 0
+        for info in every(n_batches, opt):
+            current_epoch = info['n_iter'] // n_batches
+            if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
+                break
+            # collect and visualize validation loss for choosing the best model
+            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+            if val_loss < hyper.baseline_best_val_loss:
+                last_improvement_epoch = current_epoch
+                hyper.baseline_best_parameters = opt.wrt
+                hyper.baseline_best_val_loss = val_loss
+            hyper.baseline_val_loss.append(val_loss)
+
+            # visualize training loss for comparison:
+            training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
+            hyper.baseline_train_loss.append(training_loss)
+
+        sql_session.commit()  # this updates all set information within sqlite database
+
+except Exception as e:
+    raise Exception, "LAST HYPER: %s\nORIGINAL ERROR: %s" % (pformat(hyper.__dict__), e), sys.exc_info()[2]
