@@ -67,7 +67,7 @@ Base = declarative_base(bind=engine)
 
 
 class RandomHyper(Base):
-    __tablename__ = datasetname
+    __tablename__ = "hyper"
     id = Column(Integer, primary_key=True)
     
     # hyper parameters:
@@ -351,8 +351,8 @@ while True:
 
 
 
-    # Second Run without normalizing flow
-    # ===================================
+    # baseline run - WITHOUT normalizing flow
+    # =======================================
 
     # this is extremely useful to tell everything the default sizes
     input = tm.as_tensor_variable(X[0], name="X")
