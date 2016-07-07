@@ -151,6 +151,9 @@ while True:
     hyper = RandomHyper()
     sql_session.add(hyper)
     print hyper.__dict__
+    # reset hard the saved models:
+    dm.InvertibleModel.INVERTIBLE_MODELS = []
+    tm.Model.all_models = []
 
 
     # # Model Normalizing flow
