@@ -1,7 +1,7 @@
 # coding: utf-8
 from __future__ import division
 
-import os, platform
+import os, platform, sys
 import numpy as np
 from climin.util import optimizer
 from itertools import repeat, cycle, islice, izip
@@ -40,11 +40,12 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
+suffix = "_"+sys.argv[1] if len(sys.argv) > 1 else "_several"
 
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
 #     datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "winered", "yacht"]
-datasetname = "boston"
+datasetname = "concrete"
 
 Z, X = getattr(data, "_" + datasetname)()
 # normalization is standard in Probabilistic Backpropagation Paper
@@ -61,7 +62,7 @@ X, VX, Z, VZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 20% vali
 
 # # Hyperparameters
 
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'hyperparameters_several.db'))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'hyperparameters%s.db' % suffix))
 Base = declarative_base(bind=engine)
 
 
@@ -237,7 +238,8 @@ while True:
         # visualize training loss for comparison:
         training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
         hyper.train_loss.append(training_loss)
-        sql_session.commit()  # this updates all set information within sqlite database
+
+    sql_session.commit()  # this updates all set information within sqlite database
 
 
 
@@ -325,4 +327,5 @@ while True:
         # visualize training loss for comparison:
         training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
         hyper.baseline_train_loss.append(training_loss)
-        sql_session.commit()  # this updates all set information within sqlite database
+
+    sql_session.commit()  # this updates all set information within sqlite database
