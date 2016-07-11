@@ -115,7 +115,7 @@ class RandomHyper(Base):
         self.minus_log_s = random.choice([1,2,3,4,5,6,7])
         # the prior is learned together with the other models in analogy to the paper Probabilistic Backpropagation
         
-        self.n_normflows = random.choice([1,2,3,4,8,32])
+        self.n_normflows = random.choice([1,2,3,4,8,20])  #32 is to much for theano... unfortunately
         
         self.opt_identifier = random.choice(["adadelta", "adam", "rmsprop"])
         if self.opt_identifier == "adadelta":
@@ -206,6 +206,8 @@ while True:
 
         loss = tm.loss_variational(_model)
         tm.reduce_all_identities()
+        assert all(im.is_identity or im.inverse.is_identity for im in dm.InvertibleModel.INVERTIBLE_MODELS), (
+            "all identities should be reduced by now")
 
         n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
         climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
@@ -297,6 +299,8 @@ while True:
 
         loss = tm.loss_variational(_model)
         tm.reduce_all_identities()
+        assert all(im.is_identity or im.inverse.is_identity for im in dm.InvertibleModel.INVERTIBLE_MODELS), (
+            "all identities should be reduced by now")
 
         n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
         climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
@@ -386,6 +390,8 @@ while True:
 
         loss = tm.loss_variational(_model)
         tm.reduce_all_identities()
+        assert all(im.is_identity or im.inverse.is_identity for im in dm.InvertibleModel.INVERTIBLE_MODELS), (
+            "all identities should be reduced by now")
 
         n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
         climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
