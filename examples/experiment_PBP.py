@@ -161,6 +161,8 @@ sql_session = Session()
 # optimization routine
 # ====================
 def optimize(prefix, loss, parameters):
+    if prefix and not prefix.endswith("_"):  # source of bugs
+        prefix += "_"
     tm.reduce_all_identities()
     assert all(im.is_identity or im.inverse.is_identity for im in dm.InvertibleModel.INVERTIBLE_MODELS), (
         "all identities should be reduced by now")
