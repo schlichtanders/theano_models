@@ -154,7 +154,8 @@ Concrete Helper Models
 """
 for positive values:
 """
-eps = as_tensor_variable(1e-16)
+# eps = as_tensor_variable(1e-16)
+eps = as_tensor_variable(1e-9)
 
 @track_model
 def softplus(x, module=T):

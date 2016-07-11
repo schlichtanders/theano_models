@@ -63,7 +63,7 @@ X, VX, Z, VZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 20% vali
 
 # # Hyperparameters
 
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'hyperparameters2%s.db' % suffix))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'hyperparameters_square%s.db' % suffix))
 Base = declarative_base(bind=engine)
 
 
@@ -197,7 +197,8 @@ while True:
         model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
 
         _model = model
-        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
         _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
 
 
@@ -288,7 +289,8 @@ while True:
         model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
 
         _model = model
-        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
         _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
 
         # # Optimizer
@@ -376,7 +378,8 @@ while True:
         model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
 
         _model = model
-        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
+        _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
         _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
 
         # # Optimizer
@@ -439,7 +442,7 @@ while True:
         sql_session.commit()  # this updates all set information within sqlite database
 
     except Exception as e:
-        with open(os.path.join(__path__, 'hyperparameters2%s_errors.txt' % suffix), "a") as myfile:
+        with open(os.path.join(__path__, 'hyperparameters_square%s_errors.txt' % suffix), "a") as myfile:
             error = """
 LAST HYPER: %s
 ORIGINAL ERROR: %s
