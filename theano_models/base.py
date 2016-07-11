@@ -13,6 +13,8 @@ import wrapt
 from functools import partial, wraps
 
 import numpy as np
+from frozendict import frozendict
+
 import theano
 import theano.tensor as T
 from theano.gof.fg import MissingInputError
@@ -20,7 +22,7 @@ from schlichtanders.mycontextmanagers import until_stopped, ignored
 from theano import gof, config
 from theano.compile.sharedvalue import SharedVariable
 
-from schlichtanders.mydicts import update, ModifyDict
+from schlichtanders.mydicts import update, ModifyDict, HashableDict
 from schlichtanders.mylists import sequencefy, remove_duplicates, as_list
 from schlichtanders.mymeta import proxify
 from schlichtanders.myfunctools import fmap, convert
@@ -344,7 +346,7 @@ class Merge(Model):
         """
         Parameters
         ----------
-        subgraphs : Model or dict of references
+        subgraphs : Model or dict-like of references
             to be combined consistently
         name : str
             see Model
@@ -372,7 +374,20 @@ class Merge(Model):
         name = other_references.pop("name", None)
         track = other_references.pop("track", False)
         self.original_subgraphs = subgraphs
-        self.copied_subgraphs = map(copy, subgraphs)
+        
+        def mycopy(dict_like):
+            if isinstance(dict_like, Model):
+                return copy(dict_like)
+            else:
+                # reimplement models copy method for dict_like things
+                d = HashableDict()
+                for k, v in dict_like.iteritems():
+                    if isinstance(v, Sequence):
+                        d[k] = copy(v)
+                    else:
+                        d[k] = v
+                return d
+        self.copied_subgraphs = map(mycopy, subgraphs)
 
         # remove all nested references:
         input_vars = self._gen_input_vars()
