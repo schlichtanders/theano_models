@@ -555,8 +555,10 @@ class Mixture(Merge):
         outputs_all = T.stack([pm['outputs'] for pm in prob_models])
         outputs = outputs_all[outputs_idx]
 
-        this = dict(parameters_psumto1=[self.mixture_probs],
-                    outputs=outputs)
+        this = dict(
+            parameters_psumto1=[self.mixture_probs],
+            outputs=outputs
+        )
         super(Mixture, self).__init__(this, *prob_models, track=True)
 
         # logP
