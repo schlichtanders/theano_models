@@ -292,7 +292,7 @@ def optimizeExp(prefix, loss, parameters):
 
     # start values:
     setattr(hyper, prefix + "best_val_loss ",
-            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True))
+            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX))
 
     last_improvement_epoch = 0
     # val_losses = getattr(hyper, prefix + "val_loss")
@@ -303,7 +303,7 @@ def optimizeExp(prefix, loss, parameters):
         if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX)
         if val_loss < getattr(hyper, prefix + "best_val_loss"):
             last_improvement_epoch = current_epoch
             setattr(hyper, prefix + "best_parameters", opt.wrt)
