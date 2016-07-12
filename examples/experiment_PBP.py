@@ -383,7 +383,7 @@ while True:
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
 
-            params_base = pm.standard_gaussian_noise(output_shape=(tm.total_size(targets['to_be_randomized']),))
+            params_base = pm.StandardGaussian(output_shape=(tm.total_size(targets['to_be_randomized']),))
             normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)] + [dm.LocScaleTransform(independent_scale=True)]
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
@@ -465,7 +465,7 @@ while True:
             targets['flat'] = target_normflow
             targets = tm.Merge(targets, target_normflow)
 
-            params = pm.standard_gaussian_noise(output_shape=(total_size,))
+            params = pm.StandardGaussian(output_shape=(total_size,))
             prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
                                            init_var=np.exp(-2 * hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)

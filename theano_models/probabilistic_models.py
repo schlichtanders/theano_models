@@ -129,12 +129,21 @@ However for the optimizer it is of course crucial, and here the respective optim
 # TODO maybe add ProbabilisticModel type which checks for given keys (?)
 
 
-
-
-def standard_gaussian_noise(output_shape, rng=None):
-    if rng is None:
-        rng = RNG
-    return rng.normal(output_shape, dtype=config.floatX)
+class StandardGaussian(Model):
+    def __init__(self, output_shape, rng=None):
+        self.rng = rng or RNG
+        super(StandardGaussian, self).__init__(
+            inputs=[],
+            outputs=self.rng.normal(output_shape, dtype=config.floatX)
+        )
+        rv = self['outputs'].type("rv")
+        self.logP = Model(
+            inputs=[rv],
+            outputs=(
+                - (T.prod(output_shape) / 2) * T.log(2 * np.pi)  # normalizing constant
+                - (1 / 2 * T.sum(rv ** 2))  # core exponential
+            )  # everything is elementwise
+        )
 
 
 """
@@ -189,7 +198,7 @@ class GaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        self.noise = standard_gaussian_noise(input.shape, self.rng)  # everything elementwise # TODO dtype needed?
+        self.noise = StandardGaussian(input.shape, self.rng)['outputs']  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(GaussianNoise, self).__init__(
@@ -211,7 +220,8 @@ class GaussianNoise(Model):
                 - (input.size/2) * (T.log(2*np.pi) + T.log(self.var))   # normalizing constant
                 - (1/2 * T.sum((rv - input)**2 / self.var))  # core exponential
             )  # everything is elementwise
-         )
+            # TODO this uses size, maybe this breaks things if non-vectors are used
+        )
 
 
 class DiagGaussianNoise(Model):
@@ -262,7 +272,7 @@ class DiagGaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        self.noise = standard_gaussian_noise(input.shape, self.rng)  # everything elementwise # TODO dtype needed?
+        self.noise = StandardGaussian(input.shape, self.rng)['outputs']  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(DiagGaussianNoise, self).__init__(
