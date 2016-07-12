@@ -374,7 +374,7 @@ class Merge(Model):
         name = other_references.pop("name", None)
         track = other_references.pop("track", False)
         self.original_subgraphs = subgraphs
-        
+
         def mycopy(dict_like):
             if isinstance(dict_like, Model):
                 return copy(dict_like)
@@ -457,7 +457,8 @@ class Merge(Model):
         super(Merge, self).__init__(name=name, track=track, **merge)
         # for convenience copy the dict entries too:
         for s in subgraphs:
-            update(self.__dict__, s.__dict__, overwrite=False)
+            if hasattr(s, '__dict__'):
+                update(self.__dict__, s.__dict__, overwrite=False)
 
     def _gen_input_vars(self):
         for outer in self.copied_subgraphs:

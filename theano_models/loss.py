@@ -12,7 +12,7 @@ from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.mylists import as_list
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
-from schlichtanders.myfunctools import fmap
+from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp
 from util import list_random_sources
 
 from base import Model, Merge, outputting_references
@@ -321,13 +321,139 @@ def numericalize(loss, parameters,
             # for now we ignore this
             raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
 
-    dd = DefaultDict(  # DefaultDict will save keys after they are called the first time
+    return DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=get_numericalized,
         default_setitem=lambda key, value: NotImplementedError("You cannot set items on a numericalize postmap."),
         # if this would be noexpand always, we could do it savely, but without not
         num_parameters=adapt_init_params(parameters.eval(initial_givens))
     )  # TODO add information about keys in derivatives into DefaultDict
-    return dd
+
+
+
+# TODO test numericalizeExp !!!
+def numericalizeExp(loss, parameters,
+                 annealing_combiner=None, wrapper=lambda f: f,
+                 initial_givens={}, adapt_init_params=lambda ps: ps,
+                 batch_precompile=True,
+                 **theano_function_kwargs):
+    """ Produces interface for standard numerical optimizer
+
+    Parameters
+    ----------
+    loss : Model
+        loss expressions to be numericalized
+    parameters : theano expression
+        single theano expression which denotes all parameters of the model which shall be optimized
+
+    annealing_combiner : None or AnnealingCombiner
+        indicating whether 'loss_data' and 'loss_regularizer' should be used (annealing=True) or 'loss' (default)
+    wrapper : function f -> f where f function like used in scipy.optimize.minimize
+        mainly intented for adding possibility to Average
+        is applied to any theano.function which is created (i.e. loss or derivative, loss_data or loss_regularizer)
+
+    initial_givens : dict TheanoVariable -> TheanoVariable
+        givens/replace dictionary for creating num_parameters
+        e.g. for parameters which are not grounded, but depend on a non-grounded input
+        (only needed for initialization)
+    adapt_init_params : function numpy-vector -> numpy-vector
+        for further control of initial parameters
+
+    batch_precompile : dict (key: bool)
+        key must correspond to output key
+        precompilation means, that everything related to the parameters only is precomputed per batch
+
+    theano_function_kwargs : dict
+        additional arguments passed to theano.function
+
+    Returns
+    -------
+    DefaultDict over model
+    """
+    assert (not isinstance(parameters, Sequence)), "Currently only single theano expression for parameters is supported."
+
+    theano_function_kwargs['on_unused_input'] = "ignore"
+    theano_function_kwargs['allow_input_downcast'] = True
+
+    def theano_function(*args, **kwargs):
+        update(kwargs, theano_function_kwargs, overwrite=False)
+        return wrapper(theano.function(*args, **kwargs))
+
+    def _numericalize(loss_key):
+        ret = {}
+        # loss
+        # ----
+        outputs = - loss[loss_key]  # minus is important for meanexpmap
+        noise_source = list_random_sources(outputs)  # not dependend on anything
+        sub, _ = independent_subgraphs([parameters], loss['inputs'] + noise_source, outputs)
+        logP_fparam = theano_function([parameters], sub)
+        logP_foutput = theano_function(sub + loss['inputs'], outputs)
+
+        def f(parameters, *loss_inputs):
+            rparam = logP_fparam(parameters)
+            def h(*inner_loss_inputs):
+                return logP_foutput(*(rparam + list(inner_loss_inputs)))
+            return - meanexpmap(h, *loss_inputs)  # mirrows the minus in the beginning
+        f.wrapped = logP_fparam, logP_foutput
+        ret['num_loss'] = f
+
+        # derivative:
+        # -----------
+        outputs = theano.grad(loss[loss_key], parameters, disconnected_inputs="warn")
+        noise_source = list_random_sources(outputs)  # not dependend on anything
+        sub, _ = independent_subgraphs([parameters], loss['inputs'] + noise_source, outputs)
+        fparam = theano_function([parameters], sub)
+        foutput = theano_function(sub + loss['inputs'], outputs)
+
+        def f(parameters, *loss_inputs):
+            def fix_type(x):
+                if hasattr(x, 'next'):  # no generators, as we need the information twice
+                    return list(x)
+                if hasattr(x, '__iter__'):
+                    return x
+                raise RuntimeError("This should not happen. Iterable types are expected as loss_inputs.")
+            loss_inputs = map(fix_type, loss_inputs)  # we use this 2 times, i.e. generators are not useful
+            logP_rparam = logP_fparam(parameters)
+            def h_logP(*inner_loss_inputs):
+                return logP_foutput(*(logP_rparam + list(inner_loss_inputs)))
+            log_Ps = np.asarray(map(h_logP, *loss_inputs))
+
+            rparam = fparam(parameters)
+            def h_derv(*inner_loss_inputs):
+                return foutput(*(rparam + list(inner_loss_inputs)))
+            log_derivatives = np.asarray(map(h_derv, *loss_inputs))
+            N = len(log_Ps)
+            assert N == len(log_derivatives), "this should be the same"
+
+            xs = np.exp(log_Ps)[:, None]
+            ys = log_derivatives * xs
+            # grouping formula for ratio estimator:
+            # return N * ys.sum() / xs.sum() - (N-1)/N * log_derivatives.sum()  # this worked with certain initial random variables
+            return ys.sum() / xs.sum()
+            # linear formula for ratio estimator: (does not seem to work, makes variance small again)
+            # xs_sum = xs.sum()
+            # xs_mean = xs_sum / N
+            # _cov = (xs - xs_mean) * (log_derivatives - log_derivatives.mean(axis=0))
+            # return ys.sum()/xs_sum - _cov.mean(axis=0)/xs_mean
+
+        f.wrapped = fparam, foutput
+        ret['num_jacobian'] = f
+        return ret
+
+    if annealing_combiner:
+        numericalized = _numericalize("loss_data")
+        numericalized['num_loss'] = annealing_combiner(
+            numericalized['num_loss'],
+            theano_function([parameters], loss["loss_regularizer"])
+        )
+        numericalized['num_jacobian'] = annealing_combiner(
+            numericalized['num_jacobian'],
+            theano_function([parameters], theano.grad(loss["loss_regularizer"], parameters, disconnected_inputs="warn"))
+        )
+    else:
+        numericalized = _numericalize("outputs")
+
+    numericalized['num_parameters'] = adapt_init_params(parameters.eval(initial_givens))
+    return numericalized
 
 
 # this is not itself a postmap, however essential ans specific helper for the numericalize postmap

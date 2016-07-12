@@ -131,6 +131,11 @@ However for the optimizer it is of course crucial, and here the respective optim
 
 
 
+def standard_gaussian_noise(output_shape, rng=None):
+    if rng is None:
+        rng = RNG
+    return rng.normal(output_shape, dtype=config.floatX)
+
 
 """
 Noise Models
@@ -184,7 +189,7 @@ class GaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        self.noise = standard_gaussian_noise(input.shape, self.rng)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(GaussianNoise, self).__init__(
@@ -257,7 +262,7 @@ class DiagGaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        self.noise = self.rng.normal(input.shape, dtype=config.floatX)  # everything elementwise # TODO dtype needed?
+        self.noise = standard_gaussian_noise(input.shape, self.rng)  # everything elementwise # TODO dtype needed?
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(DiagGaussianNoise, self).__init__(

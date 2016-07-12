@@ -5,7 +5,7 @@
 from base import (Model, Merge, Reparameterize, Flatten, Center,
                   inputting_references, outputting_references, models_as_outputs, model_to_output)
 from loss import (loss_deterministic, loss_probabilistic, loss_regularizer, loss_variational, loss_normalizingflow,
-                  numericalize, scipy_kwargs, climin_kwargs, AnnealingCombiner)
+                  numericalize, scipy_kwargs, climin_kwargs, AnnealingCombiner, numericalizeExp)
 from base_tools import(
     as_merge, track_merge, as_model, track_model,
     fct_to_inputs_outputs, get_equiv_by_name,
