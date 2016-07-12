@@ -1,5 +1,4 @@
 # coding: utf-8
-# TODO add deterministic normflow versions (i.e. including normflow within deterministic part)!! both for normflow and baseline
 from __future__ import division
 
 import contextlib
@@ -35,6 +34,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 tm.inputting_references.update(['to_be_randomized'])
 tm.inputting_references, tm.outputting_references
+
+EPS = 1e-8
 
 from schlichtanders.myobjects import NestedNamespace
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
@@ -255,7 +256,7 @@ def optimize(prefix, loss, parameters):
             break
         # collect and visualize validation loss for choosing the best model
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
-        if val_loss < getattr(hyper, prefix + "best_val_loss"):
+        if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             last_improvement_epoch = current_epoch
             setattr(hyper, prefix + "best_parameters", opt.wrt)
             setattr(hyper, prefix + "best_val_loss", val_loss)
@@ -304,7 +305,7 @@ def optimizeExp(prefix, loss, parameters):
             break
         # collect and visualize validation loss for choosing the best model
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX)
-        if val_loss < getattr(hyper, prefix + "best_val_loss"):
+        if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             last_improvement_epoch = current_epoch
             setattr(hyper, prefix + "best_parameters", opt.wrt)
             setattr(hyper, prefix + "best_val_loss", val_loss)
