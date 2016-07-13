@@ -258,7 +258,7 @@ def optimize(prefix, loss, parameters):
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             last_improvement_epoch = current_epoch
-            setattr(hyper, prefix + "best_parameters", opt.wrt)
+            setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
             setattr(hyper, prefix + "best_val_loss", val_loss)
         # val_losses.append(val_loss)
 
@@ -307,7 +307,7 @@ def optimizeExp(prefix, loss, parameters):
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             last_improvement_epoch = current_epoch
-            setattr(hyper, prefix + "best_parameters", opt.wrt)
+            setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
             setattr(hyper, prefix + "best_val_loss", val_loss)
         # val_losses.append(val_loss)
 

@@ -3,7 +3,8 @@
 
 # flat core
 from base import (Model, Merge, Reparameterize, Flatten, Center,
-                  inputting_references, outputting_references, models_as_outputs, model_to_output)
+                  inputting_references, outputting_references, models_as_outputs, model_to_output,
+                  prox_center, prox_flatten, prox_reparameterize)
 from loss import (loss_deterministic, loss_probabilistic, loss_regularizer, loss_variational, loss_normalizingflow,
                   numericalize, scipy_kwargs, climin_kwargs, AnnealingCombiner, numericalizeExp)
 from base_tools import(

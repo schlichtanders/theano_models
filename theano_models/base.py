@@ -502,6 +502,28 @@ Models which are used everywhere and always, hence belong to the core. At the mo
 models used for reparameterization purposes.
 """
 
+def prox_reparameterize(parameters, f, finv, givens={}):
+    parameters = convert(parameters, Sequence)
+    assert all(is_clonable(param) for param in parameters), (
+        "Can only flatten clonable parameters."
+    )
+    underlying_parameters = []
+    try:
+        cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens, mode="FAST_COMPILE")()
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        # clone is decisive as we otherwise get an infinite reference loop
+        cp_parameters = map(clone, parameters)
+
+    for p, cp in izip(parameters, cp_parameters):
+        underlying_p = model_to_output(finv(cp))
+        underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
+        new_p = model_to_output(f(underlying_p))
+        new_p.name = (p.name or str(p)) + "_reparam"
+        proxify(p, new_p)
+        underlying_parameters.append(underlying_p)
+    return underlying_parameters
+
 
 class Reparameterize(Model):
     """ This class is for a clean transformation of parameters which interacts well with Merge and visualization
@@ -522,62 +544,92 @@ class Reparameterize(Model):
         f : function theano_variable -> theano_variable
         finv : function theano_variable -> theano_variable
         """
-        is_singleton = not isinstance(parameters, Sequence)
-        parameters = convert(parameters, Sequence)
-        assert all(is_clonable(param) for param in parameters), (
-            "Can only flatten clonable parameters."
-        )
-        underlying_parameters = []
-        try:
-            cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens, mode="FAST_COMPILE")()
-        except MissingInputError as e:
-            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-            # clone is decisive as we otherwise get an infinite reference loop
-            cp_parameters = map(clone, parameters)
-
-        for p, cp in izip(parameters, cp_parameters):
-            underlying_p = model_to_output(finv(cp))
-            underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
-            new_p = model_to_output(f(underlying_p))
-            new_p.name = (p.name or str(p)) + "_reparam"
-            proxify(p, new_p)
-            underlying_parameters.append(underlying_p)
-        # return new_underlying_parameters[0] if is_singleton else new_underlying_parameters
         super(Reparameterize, self).__init__(
             inputs=[],
-            outputs=parameters[0] if is_singleton else parameters,
-            parameters=underlying_parameters
+            outputs=parameters,
+            parameters=prox_reparameterize(parameters, f, finv, givens)
         )
+
+
+def prox_center(parameters, givens):
+    parameters = convert(parameters, Sequence)
+    try:
+        copies = theano.function([], parameters, givens=givens)()
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        assert all(is_clonable(p) for p in parameters), "can only center clonable parameters"
+        copies = [clone(p) for p in parameters]
+
+    # this works for both numeric or symbolic "copies"
+    zeros = [T.zeros(cp.shape) for cp in copies]
+    for z, p in izip(zeros, parameters):
+        z.name = str(p) + "_centered"
+    for p, z, cp in izip(parameters, zeros, copies):
+        new_name = str(p) + "_centered"
+        proxify(p, z + cp)
+        p.name = new_name
+    return zeros
 
 
 class Center(Model):
-    def __init__(self, parameters):
-        parameters = convert(parameters, Sequence)
-        try:
-            copies = theano.function([], parameters)()
-        except MissingInputError as e:
-            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-            assert all(is_clonable(p) for p in parameters), "can only center clonable parameters"
-            copies = [clone(p) for p in parameters]
-
-        # this works for both numeric or symbolic "copies"
-        zeros = [T.zeros(cp.shape) for cp in copies]
-        for z, p in izip(zeros, parameters):
-            z.name = str(p) + "_centered"
-        for p, z, cp in izip(parameters, zeros, copies):
-            new_name = str(p) + "_centered"
-            proxify(p, z + cp)
-            p.name = new_name
+    def __init__(self, parameters, givens={}):
 
         super(Center, self).__init__(
             inputs=[],
-            parameters=zeros,
+            parameters=prox_center(parameters, givens),
             outputs=parameters
         )
 
 
+def prox_flatten(parameters, givens={}):
+    try:
+        if not isinstance(parameters, Sequence):
+            raise ValueError("`parameters` is not Sequence. Nothing to flat.")
+        flat_sym = T.concatenate([p.flatten() for p in parameters])
+        shapes_sym = [p.shape for p in parameters]
+        _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens, mode="FAST_COMPILE")()
+        flat_num, shapes_num = _f[0], _f[1:]
+        flat = as_tensor_variable(flat_num)
+        # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
+        # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
+        flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in parameters)
 
+        i = 0
+        for p, shape in izip(parameters, shapes_num):
+            # for size and shapes we need to refer to the copies, as the original parameters get proxified
+            # (and size/shape refer to the parameters again)
+            size = np.prod(shape)
+            new_p = flat[i:i + size].reshape(shape)
+            new_p.name = (p.name or str(p)) + "_flat"
+            proxify(p, new_p)
+            i += size
 
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        assert all(is_clonable(p) for p in parameters), "can only flatten clonable parameters"
+        # it is unfortunately not trivial how to flatten parameters
+        # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
+        # while both are parameters finally. If p3 comes before p1, we get that
+        # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
+        # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
+        # to get its position in the flat string
+        # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
+        # well formed theano variables. It is tree-like orderable.
+
+        copies = clone_all(parameters)
+        flat = T.concatenate([cp.flatten() for cp in copies])
+        flat.name = '"%s"' % ":".join(cp.name for cp in copies)
+        # Subgraph({'inputs': [], 'outputs': flat}, "symbolic_flat")  # to encapsulate the mess with clone_all TODO needed? seemed buggy
+
+        i = 0
+        for p, cp in izip(parameters, copies):
+            # for size and shapes we need to refer to the copies, as the original parameters get proxified
+            # (and size/shape refer to the parameters again)
+            new_p = flat[i:i + cp.size].reshape(cp.shape)
+            new_p.name = (p.name or str(p)) + "_flat"  # unnecessary if FlatKey is its own Model
+            proxify(p, new_p)
+            i += cp.size
+    return flat
 
 class Flatten(Model):
     def __init__(self, parameters, flat_key="flat", givens={}):
@@ -590,56 +642,8 @@ class Flatten(Model):
         initial_inputs
         """
         # TODO raise error/warning if parameters are already proxified
-        try:
-            if not isinstance(parameters, Sequence):
-                raise ValueError("`parameters` is not Sequence. Nothing to flat.")
-            flat_sym = T.concatenate([p.flatten() for p in parameters])
-            shapes_sym = [p.shape for p in parameters]
-            _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens, mode="FAST_COMPILE")()
-            flat_num, shapes_num = _f[0], _f[1:]
-            flat = as_tensor_variable(flat_num)
-            # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
-            # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
-            flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in parameters)
-
-            i = 0
-            for p, shape in izip(parameters, shapes_num):
-                # for size and shapes we need to refer to the copies, as the original parameters get proxified
-                # (and size/shape refer to the parameters again)
-                size = np.prod(shape)
-                new_p = flat[i:i + size].reshape(shape)
-                new_p.name = (p.name or str(p)) + "_flat"
-                proxify(p, new_p)
-                i += size
-
-        except MissingInputError as e:
-            warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-            assert all(is_clonable(p) for p in parameters), "can only flatten clonable parameters"
-            # it is unfortunately not trivial how to flatten parameters
-            # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
-            # while both are parameters finally. If p3 comes before p1, we get that
-            # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
-            # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
-            # to get its position in the flat string
-            # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
-            # well formed theano variables. It is tree-like orderable.
-
-            copies = clone_all(parameters)
-            flat = T.concatenate([cp.flatten() for cp in copies])
-            flat.name = '"%s"' % ":".join(cp.name for cp in copies)
-            # Subgraph({'inputs': [], 'outputs': flat}, "symbolic_flat")  # to encapsulate the mess with clone_all TODO needed? seemed buggy
-
-            i = 0
-            for p, cp in izip(parameters, copies):
-                # for size and shapes we need to refer to the copies, as the original parameters get proxified
-                # (and size/shape refer to the parameters again)
-                new_p = flat[i:i + cp.size].reshape(cp.shape)
-                new_p.name = (p.name or str(p)) + "_flat"   # unnecessary if FlatKey is its own Model
-                proxify(p, new_p)
-                i += cp.size
-
         super(Flatten, self).__init__(**{
             'inputs': [],  # if flat_key='inputs' this gets overwritten by default dict behaviour
-            flat_key: flat,
+            flat_key: prox_flatten(parameters, givens),
             'outputs': parameters,
         })
