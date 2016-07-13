@@ -114,6 +114,7 @@ class RandomHyper(Base):
     normflows_train_loss = Column(PickleType)
     normflows_val_loss = Column(PickleType)
     normflows_epochs = Column(Integer)
+    normflows_adapt_init_params = Column(PickleType, nullable=True)
 
     # normflows2:
     normflows2_best_val_loss = Column(Float)
@@ -121,6 +122,7 @@ class RandomHyper(Base):
     normflows2_train_loss = Column(PickleType)
     normflows2_val_loss = Column(PickleType)
     normflows2_epochs = Column(Integer)
+    normflows2_adapt_init_params = Column(PickleType, nullable=True)
 
     # normflows det:
     normflowsdet_best_val_loss = Column(Float)
@@ -128,6 +130,7 @@ class RandomHyper(Base):
     normflowsdet_train_loss = Column(PickleType)
     normflowsdet_val_loss = Column(PickleType)
     normflowsdet_epochs = Column(Integer)
+    normflowsdet_adapt_init_params = Column(PickleType, nullable=True)
 
     # normflows det2:
     normflowsdet2_best_val_loss = Column(Float)
@@ -135,6 +138,7 @@ class RandomHyper(Base):
     normflowsdet2_train_loss = Column(PickleType)
     normflowsdet2_val_loss = Column(PickleType)
     normflowsdet2_epochs = Column(Integer)
+    normflowsdet2_adapt_init_params = Column(PickleType, nullable=True)
 
     # mixture:
     mixture_best_val_loss = Column(Float)
@@ -142,6 +146,7 @@ class RandomHyper(Base):
     mixture_train_loss = Column(PickleType)
     mixture_val_loss = Column(PickleType)
     mixture_epochs = Column(Integer)
+    mixture_adapt_init_params = Column(PickleType, nullable=True)
 
     # normflows maximum likelihood:
     normflowsml_best_val_loss = Column(Float)
@@ -149,6 +154,7 @@ class RandomHyper(Base):
     normflowsml_train_loss = Column(PickleType)
     normflowsml_val_loss = Column(PickleType)
     normflowsml_epochs = Column(Integer)
+    baseline_adapt_init_params = Column(PickleType, nullable=True)
 
     # baseline:
     baseline_best_val_loss = Column(Float)
@@ -156,6 +162,7 @@ class RandomHyper(Base):
     baseline_train_loss = Column(PickleType)
     baseline_val_loss = Column(PickleType)
     baseline_epochs = Column(Integer)
+    baseline_adapt_init_params = Column(PickleType, nullable=True)
 
     def __init__(self, hyper_dict=None):  # we directly refer to dict as sqlalchemy deletes the dict once committed (probably for detecting changes
         if hyper_dict is not None:
@@ -200,6 +207,7 @@ class RandomHyper(Base):
             setattr(self, prefix + "train_loss", [])
             setattr(self, prefix + "val_loss", [])
             setattr(self, prefix + "best_epoch", 0)
+            setattr(self, prefix + "adapt_init_params ", None)
 
 Base.metadata.create_all()
 Session = sessionmaker(bind=engine)
@@ -222,12 +230,14 @@ def optimize(prefix, loss, parameters):
 
     assert len(list(weights_regularizer_1epoch())) == n_batches
 
+    adapt_init_params = np.random.normal(size=ps.size, scale=0.1)
+    setattr(hyper, prefix + "adapt_init_params", adapt_init_params)
     optimizer_kwargs = tm.numericalize(loss, parameters,
         batch_mapreduce=summap,
         annealing_combiner=tm.AnnealingCombiner(
             weights_regularizer=cycle(weights_regularizer_1epoch())
         ),
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.1),
+        adapt_init_params=lambda ps: ps + adapt_init_params,
     #     profile=True,
     #     mode='FAST_COMPILE',
     )
