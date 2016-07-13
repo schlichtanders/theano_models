@@ -73,7 +73,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, 'experiment_square%s_errors.txt' % suffix), "a") as myfile:
+        with open(os.path.join(__path__, 'experiment_PBP_square%s_errors.txt' % suffix), "a") as myfile:
             error = """
 %s
 ------------
@@ -84,7 +84,7 @@ ORIGINAL ERROR: %s""" % (title, pformat(hyper.__dict__), traceback.format_exc())
 
 # # Hyperparameters
 
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment_square%s.db' % suffix))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment_PBP_square%s.db' % suffix))
 Base = declarative_base(bind=engine)
 
 
@@ -199,7 +199,7 @@ class RandomHyper(Base):
             setattr(self, prefix + "best_val_loss", inf)
             setattr(self, prefix + "train_loss", [])
             setattr(self, prefix + "val_loss", [])
-            setattr(self, prefix + "epochs", 0)
+            setattr(self, prefix + "best_epoch", 0)
 
 Base.metadata.create_all()
 Session = sessionmaker(bind=engine)
@@ -246,18 +246,16 @@ def optimize(prefix, loss, parameters):
     setattr(hyper, prefix + "best_val_loss ",
             optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True))
 
-    last_improvement_epoch = 0
     # val_losses = getattr(hyper, prefix + "val_loss")
     # train_losses = getattr(hyper, prefix + "train_loss")
     for info in every(n_batches, opt):
         current_epoch = info['n_iter']//n_batches
-        setattr(hyper, prefix + "epochs", current_epoch)
-        if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
+        if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
-            last_improvement_epoch = current_epoch
+            setattr(hyper, prefix + "best_epoch", current_epoch)
             setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
             setattr(hyper, prefix + "best_val_loss", val_loss)
         # val_losses.append(val_loss)
@@ -295,18 +293,17 @@ def optimizeExp(prefix, loss, parameters):
     setattr(hyper, prefix + "best_val_loss ",
             optimizer_kwargs['num_loss'](opt.wrt, VZ, VX))
 
-    last_improvement_epoch = 0
     # val_losses = getattr(hyper, prefix + "val_loss")
     # train_losses = getattr(hyper, prefix + "train_loss")
     for info in every(n_batches, opt):
         current_epoch = info['n_iter']//n_batches
         setattr(hyper, prefix + "epochs", current_epoch)
-        if current_epoch - last_improvement_epoch > hyper.max_epochs_without_improvement:
+        if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
         val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
-            last_improvement_epoch = current_epoch
+            setattr(hyper, prefix + "best_epoch", current_epoch)
             setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
             setattr(hyper, prefix + "best_val_loss", val_loss)
         # val_losses.append(val_loss)
