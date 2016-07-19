@@ -24,11 +24,12 @@ from theano.compile.sharedvalue import SharedVariable
 
 from schlichtanders.mydicts import update, ModifyDict, HashableDict
 from schlichtanders.mylists import sequencefy, remove_duplicates, as_list
-from schlichtanders.mymeta import proxify
-from schlichtanders.myfunctools import fmap, convert
+from schlichtanders.mymeta import proxify, Proxifier
+from schlichtanders.myfunctools import fmap, convert, as_wrapper, decorator_from_fmap
 
 from util import clone, as_tensor_variable, shallowflatten_keep_vars, deepflatten_keep_vars, U, reset_eval
-from util.theano_helpers import is_clonable, get_graph_inputs, clone_all, is_pseudo_constant
+from util.theano_helpers import is_clonable, get_graph_inputs, clone_all, is_pseudo_constant, unbroadcastable_to_idx, \
+    broadcastable_to_idx
 import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -51,11 +52,31 @@ def model_to_output(m):
     else:
         return m
 
-
 @wrapt.decorator
 def models_as_outputs(wrapped, instance, args, kwargs):
     return wrapped(*map(model_to_output, args), **fmap(model_to_output, kwargs))
 
+
+def fmap_model(f, *args_models, **kwargs_models):
+    """ maps a function over model contexts by applying it to the outputs respectively instead of the models
+
+    returns a Merge of model outputs of f itself if it returns models, as well as the input models.
+    For a fmap_model which returns the trivial Model(inputs, outputs), please use ``as_model`` combined with
+    ``models_as_outputs`` decorators
+    """
+    outputs = f(map(model_to_output, args_models), **fmap(model_to_output, kwargs_models))
+    output_models = []
+    if isinstance(outputs, Sequence):
+        _outputs = []
+        for o in outputs:
+            if isinstance(o, Model):
+                output_models.append(o)
+                _outputs += convert(o['outputs'], list)
+            else:
+                _outputs.append(o)
+        outputs = shallowflatten_keep_vars(_outputs)
+    return Merge(*(output_models + list(args_models) + kwargs_models.values()),
+                 outputs=outputs)
 
 
 """
@@ -114,6 +135,8 @@ class Model(MutableMapping):
     ALLOWED_VALUETYPES = (gof.Variable, )
 
     all_models = []
+
+    weak_identity_check = True
 
     @models_as_outputs
     def __init__(self, outputs, inputs=None, name=None, track=True, unique_name=True, **further_references):
@@ -257,6 +280,7 @@ class Model(MutableMapping):
         # reshape constant dimension:
         def len_min_sum(iterable):
             return len(iterable) - sum(iterable)
+
         def new_reshaped():
             for o, n in izip(old, new):
                 if (o.broadcastable != n.broadcastable
@@ -272,9 +296,28 @@ class Model(MutableMapping):
                 else:
                     yield n
 
-        assert all(o.type == n.type for o, n in izip(old, new_reshaped())), "No substitution as theano types differ"
+        def new_rebroadcasted():
+            for o, n in izip(old, new):
+                n = T.addbroadcast(n, *broadcastable_to_idx(o.broadcastable))
+                n = T.unbroadcast(n, *unbroadcastable_to_idx(o.broadcastable))
+                yield n
+
+        original_new = new
+        new = list(new_reshaped())
+        if self.weak_identity_check:
+            assert all(o.dtype == n.dtype for o, n in izip(old, new)), "same dtype needed"
+            assert all(len(o.broadcastable) == len(n.broadcastable) for o, n in izip(old, new)), "same dimensionality needed"
+            # same broadcastable dimensions are still ensured to get theano type consistency
+            new = list(new_rebroadcasted())
+        else:
+            assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as theano types differ"
+            # this means that also broadcastables match
+
         for o, n in izip(old, new):
             proxify(o, n)
+
+        # ensure matching between models:
+        self.references[key] = original_new[0] if old_singleton else original_new
         # make sure that simply all cached compiled functions get destroyed, as references are no longer valid
         reset_eval(self)
 
@@ -493,157 +536,3 @@ class Merge(Model):
                         del inner[oref]
                         return True
         return False
-
-
-"""
-Core Models
-===========
-Models which are used everywhere and always, hence belong to the core. At the moment, these encompass mainly
-models used for reparameterization purposes.
-"""
-
-def prox_reparameterize(parameters, f, finv, givens={}):
-    parameters = convert(parameters, Sequence)
-    assert all(is_clonable(param) for param in parameters), (
-        "Can only flatten clonable parameters."
-    )
-    underlying_parameters = []
-    try:
-        cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens, mode="FAST_COMPILE")()
-    except MissingInputError as e:
-        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-        # clone is decisive as we otherwise get an infinite reference loop
-        cp_parameters = map(clone, parameters)
-
-    for p, cp in izip(parameters, cp_parameters):
-        underlying_p = model_to_output(finv(cp))
-        underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
-        new_p = model_to_output(f(underlying_p))
-        new_p.name = (p.name or str(p)) + "_reparam"
-        proxify(p, new_p)
-        underlying_parameters.append(underlying_p)
-    return underlying_parameters
-
-
-class Reparameterize(Model):
-    """ This class is for a clean transformation of parameters which interacts well with Merge and visualization
-
-    In General what is done is that for each param in parameters::
-        new_param = finv(param)
-            param = f(new_param)
-
-    The underlying new_params are listed as parameters in the model, while the reparameterized params are outputs
-    """
-    # TODO raise error/warning if parameters are already proxified
-    def __init__(self, parameters, f, finv, givens={}):
-        """
-        Parameters
-        ----------
-        parameters : list of theano variables
-            to be reparameterized
-        f : function theano_variable -> theano_variable
-        finv : function theano_variable -> theano_variable
-        """
-        super(Reparameterize, self).__init__(
-            inputs=[],
-            outputs=parameters,
-            parameters=prox_reparameterize(parameters, f, finv, givens)
-        )
-
-
-def prox_center(parameters, givens):
-    parameters = convert(parameters, Sequence)
-    try:
-        copies = theano.function([], parameters, givens=givens)()
-    except MissingInputError as e:
-        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-        assert all(is_clonable(p) for p in parameters), "can only center clonable parameters"
-        copies = [clone(p) for p in parameters]
-
-    # this works for both numeric or symbolic "copies"
-    zeros = [T.zeros(cp.shape) for cp in copies]
-    for z, p in izip(zeros, parameters):
-        z.name = str(p) + "_centered"
-    for p, z, cp in izip(parameters, zeros, copies):
-        new_name = str(p) + "_centered"
-        proxify(p, z + cp)
-        p.name = new_name
-    return zeros
-
-
-class Center(Model):
-    def __init__(self, parameters, givens={}):
-
-        super(Center, self).__init__(
-            inputs=[],
-            parameters=prox_center(parameters, givens),
-            outputs=parameters
-        )
-
-
-def prox_flatten(parameters, givens={}):
-    try:
-        if not isinstance(parameters, Sequence):
-            raise ValueError("`parameters` is not Sequence. Nothing to flat.")
-        flat_sym = T.concatenate([p.flatten() for p in parameters])
-        shapes_sym = [p.shape for p in parameters]
-        _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens, mode="FAST_COMPILE")()
-        flat_num, shapes_num = _f[0], _f[1:]
-        flat = as_tensor_variable(flat_num)
-        # we need extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
-        # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
-        flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in parameters)
-
-        i = 0
-        for p, shape in izip(parameters, shapes_num):
-            # for size and shapes we need to refer to the copies, as the original parameters get proxified
-            # (and size/shape refer to the parameters again)
-            size = np.prod(shape)
-            new_p = flat[i:i + size].reshape(shape)
-            new_p.name = (p.name or str(p)) + "_flat"
-            proxify(p, new_p)
-            i += size
-
-    except MissingInputError as e:
-        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
-        assert all(is_clonable(p) for p in parameters), "can only flatten clonable parameters"
-        # it is unfortunately not trivial how to flatten parameters
-        # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
-        # while both are parameters finally. If p3 comes before p1, we get that
-        # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
-        # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
-        # to get its position in the flat string
-        # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
-        # well formed theano variables. It is tree-like orderable.
-
-        copies = clone_all(parameters)
-        flat = T.concatenate([cp.flatten() for cp in copies])
-        flat.name = '"%s"' % ":".join(cp.name for cp in copies)
-        # Subgraph({'inputs': [], 'outputs': flat}, "symbolic_flat")  # to encapsulate the mess with clone_all TODO needed? seemed buggy
-
-        i = 0
-        for p, cp in izip(parameters, copies):
-            # for size and shapes we need to refer to the copies, as the original parameters get proxified
-            # (and size/shape refer to the parameters again)
-            new_p = flat[i:i + cp.size].reshape(cp.shape)
-            new_p.name = (p.name or str(p)) + "_flat"  # unnecessary if FlatKey is its own Model
-            proxify(p, new_p)
-            i += cp.size
-    return flat
-
-class Flatten(Model):
-    def __init__(self, parameters, flat_key="flat", givens={}):
-        """ this does not work with subgraphs as substitution is required
-
-        Parameters
-        ----------
-        model
-        key
-        initial_inputs
-        """
-        # TODO raise error/warning if parameters are already proxified
-        super(Flatten, self).__init__(**{
-            'inputs': [],  # if flat_key='inputs' this gets overwritten by default dict behaviour
-            flat_key: prox_flatten(parameters, givens),
-            'outputs': parameters,
-        })

@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function, division
 import sys
+
+import itertools
 from six import integer_types
 from collections import Sequence, OrderedDict, defaultdict
 from itertools import izip
@@ -74,6 +76,12 @@ def is_pseudo_constant(var):
             and var.owner.op == theano.tensor.tensor_copy
             and isinstance(var.owner.inputs[0], gof.Constant))
 
+
+def broadcastable_to_idx(br):
+    return [i for i, b in izip(itertools.count(), br) if b]
+
+def unbroadcastable_to_idx(br):
+    return [i for i, b in izip(itertools.count(), br) if not b]
 
 """bugfixing __str__ of TensorConstant by monkey_patching"""
 

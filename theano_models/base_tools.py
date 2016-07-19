@@ -4,6 +4,7 @@ from __future__ import print_function, division
 
 import operator as op
 import types
+import warnings
 from collections import Sequence
 from functools import wraps
 from itertools import izip
@@ -13,6 +14,7 @@ import wrapt
 import theano
 from schlichtanders.mycontextmanagers import until_stopped
 from schlichtanders.mylists import remove_duplicates
+from schlichtanders.mymeta import Proxifier, proxify
 from theano import gof
 from theano.gof.fg import MissingInputError
 import theano.tensor as T
@@ -20,8 +22,9 @@ from theano.gof.graph import Variable
 from theano.compile import Function
 
 from schlichtanders.myfunctools import convert
-from base import Model, Merge, get_inputting_references, get_outputting_references
-from util import as_tensor_variable, clone, deepflatten_keep_vars
+from base import Model, Merge, get_inputting_references, get_outputting_references, model_to_output
+from theano_models.util.theano_helpers import broadcastable_to_idx, unbroadcastable_to_idx
+from util import as_tensor_variable, clone, deepflatten_keep_vars, is_clonable, clone_all
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
@@ -29,7 +32,9 @@ __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 """
 Core Decorators
 ===============
-to easily track functions as Models (e.g. for visualization)
+To easily track functions as Models (e.g. for visualization).
+
+By default no function is wrapped in this package, use the decorators manually as higher order functions.
 """
 
 
@@ -146,6 +151,167 @@ def track_merge(*merge_subgraphs, **merge_kwargs):
     return decorator
 
 
+# proxifying function need reversed model
+
+def track_proxmodel(key_underlying_params):
+    @wrapt.decorator
+    def wrapper(wrapped, instance, args, kwargs):
+        refs = {
+            'inputs': [],  # gets overwritten by key_underlying_params in case
+            'outputs': args[0],
+            key_underlying_params: wrapped(*args, **kwargs),
+        }
+        if isinstance(refs['outputs'], types.GeneratorType):
+            refs['outputs'] = list(refs['outputs'])
+        # track as model
+        Model(name=wrapped.func_name,**refs)
+        return refs['outputs']
+    return wrapper
+
+
+def as_proxmodel(key_underlying_params):
+    @wrapt.decorator
+    def wrapper(wrapped, instance, args, kwargs):
+        refs = {
+            'inputs': [],  # gets overwritten by key_underlying_params in case
+            'outputs': args[0],
+            key_underlying_params: wrapped(*args, **kwargs),
+        }
+        if isinstance(refs['outputs'], types.GeneratorType):
+            refs['outputs'] = list(refs['outputs'])
+        # track as model
+        return Model(name=wrapped.func_name,**refs)
+    return wrapper
+
+
+"""
+Proxifcation
+============
+proxifying functions which are used everywhere and always.
+"""
+
+
+def prox_reparameterize(parameters, f, finv, givens={}):
+    """
+    In General what is done is that for each param in parameters::
+        new_param = finv(param)
+            param = f(new_param)
+
+    The underlying new_params are returned
+
+    Parameters
+    ----------
+    parameters : list of theano variables
+        to be reparameterized
+    f : function theano_variable -> theano_variable
+    finv : function theano_variable -> theano_variable
+    """
+    parameters = convert(parameters, Sequence)
+    if any(isinstance(y, Proxifier) for y in parameters):
+        raise RuntimeError(
+            "parameters is already proxified. It is usually not intended to proxify things twice.")
+    assert all(is_clonable(param) for param in parameters), (
+        "Can only flatten clonable parameters."
+    )
+    underlying_parameters = []
+    try:
+        cp_parameters = theano.function([], parameters, on_unused_input="ignore", givens=givens, mode="FAST_COMPILE")()
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        # clone is decisive as we otherwise get an infinite reference loop
+        cp_parameters = map(clone, parameters)
+
+    for p, cp in izip(parameters, cp_parameters):
+        underlying_p = model_to_output(finv(cp))
+        underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
+        new_p = model_to_output(f(underlying_p))
+        new_p.name = (p.name or str(p)) + "_reparam"
+        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
+        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
+        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
+        proxify(p, new_p)
+        underlying_parameters.append(underlying_p)
+    return underlying_parameters
+
+
+def prox_center(parameters, givens={}):
+    """ centers the parameters by proxifying, returning the new underlying parameters
+
+    Tries to compute numeric value of the parameters, however if this is not possible, a symbolic copy is used. """
+    parameters = convert(parameters, Sequence)
+    if any(isinstance(y, Proxifier) for y in parameters):
+        raise RuntimeError(
+            "parameters is already proxified. It is usually not intended to proxify things twice.")
+    try:
+        copies = theano.function([], parameters, givens=givens)()
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        assert all(is_clonable(p) for p in parameters), "can only center clonable parameters"
+        copies = [clone(p) for p in parameters]
+
+    # this works for both numeric or symbolic "copies"
+    zeros = [T.zeros(cp.shape) for cp in copies]
+    for z, p in izip(zeros, parameters):
+        z.name = str(p) + "_centered"
+    for p, z, cp in izip(parameters, zeros, copies):
+        new_p = z + cp
+        new_p.name = str(p) + "_centered"
+        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
+        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
+        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
+        proxify(p, new_p)
+    return zeros
+
+
+def prox_flatten(parameters, givens={}):
+    """ flattens given parameters by using proxify, returning the new underlying flattend vector
+
+    if the shape information cannot be numericalized, a symbolic copy is used for inferring symbolic shapes """
+    try:
+        if not isinstance(parameters, Sequence):
+            raise ValueError("`parameters` is not Sequence. Nothing to flat.")
+        if any(isinstance(y, Proxifier) for y in parameters):
+            raise RuntimeError(
+                "parameters is already proxified. It is usually not intended to proxify things twice.")
+        flat_sym = T.concatenate([p.flatten() for p in parameters])
+        shapes_sym = [p.shape for p in parameters]
+        _f = theano.function([], [flat_sym] + shapes_sym, on_unused_input="warn", givens=givens, mode="FAST_COMPILE")()
+        flat_num, shapes = _f[0], _f[1:]
+        flat = as_tensor_variable(flat_num)
+        sizes = map(np.prod, shapes)
+
+    except MissingInputError as e:
+        warnings.warn("MissingInputs. Using symbolic version, might be considerably slower. %s" % e)
+        assert all(is_clonable(p) for p in parameters), "can only flatten clonable parameters"
+        # it is unfortunately not trivial how to flatten parameters
+        # one crucial thing is to handle interdependencies of parameters, meaning that p3 could depend on p1
+        # while both are parameters finally. If p3 comes before p1, we get that
+        # p3? -> flat[p3_slice]? -> p3_cp.shape? -> p1? -> flat[p1_slice]? -> p3_cp.shape?
+        # where the last is indeed a pTHREE_cp.shape because p1 comes after p3 and hence needs also p3's shape
+        # to get its position in the flat string
+        # Fortunately, we can assume that there is no cyclic dependency between parameters as between any
+        # well formed theano variables. It is tree-like orderable.
+
+        copies = clone_all(parameters)
+        flat = T.concatenate([cp.flatten() for cp in copies])
+        shapes = [cp.shape for cp in copies]
+        sizes = [cp.size for cp in copies]
+
+    # CAUTION: this requires extra escaping that this works with d3viz and graphviz, because colon : in names has extra semantics
+    # see http://stackoverflow.com/questions/31523810/pydot-error-involving-parsing-character-followed-by-number
+    flat.name = '"%s"' % ':'.join((p.name or str(p)) for p in parameters)
+    i = 0
+    for p, size, shape in izip(parameters, sizes, shapes):
+        new_p = flat[i:i + size].reshape(shape)
+        new_p.name = (p.name or str(p)) + "_flat"
+        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
+        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
+        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
+        proxify(p, new_p)
+        i += size
+    return flat
+
+
 """
 Concrete Helper Models
 ----------------------
@@ -157,19 +323,15 @@ for positive values:
 # eps = as_tensor_variable(1e-16)
 eps = as_tensor_variable(1e-9)
 
-@track_model
 def softplus(x, module=T):
     return module.log(module.exp(x) + 1)
 
-@track_model
 def softplus_inv(y, module=T):
     return module.log(module.exp(y) - 1)
 
-@track_model
 def squareplus(x, module=T):
     return module.square(x) + eps  # to ensure >= 0
 
-@track_model
 def squareplus_inv(x, module=T):
     return module.sqrt(x - eps)
 
@@ -178,28 +340,22 @@ def squareplus_inv(x, module=T):
 for p-values (0,1)
 """
 
-@track_model
 def tan_01_R(x):
     return T.tan(np.pi * (x - 0.5))
 
-@track_model
 def tan_01_R_inv(y):
     return T.ifelse(T.lt(y, 0), -(T.arctan(T.inv(y))) / np.pi, 1-(T.arctan(T.inv(y))) / np.pi)
 
-@track_model
 def square_01_R(x):
     return (2*x - 1) / (x - x*x)
 
-@track_model
 def square_01_R_inv(y, module=T):
     return (module.sqrt(y*y + 4) + y - 2) / (2*y)
 
 
-@track_model
 def logit(x):
     return -T.log(T.inv(x) - 1)
 
-@track_model
 def logistic(y):
     T.inv(1 + T.exp(-y))
 
@@ -207,13 +363,11 @@ def logistic(y):
 """
 psumto1
 """
-@track_model
 def softmax(y, module=T):
     expy = module.exp(y)
     return expy / expy.sum()
 
 
-@track_model
 def softmax_inv(x, initial_normalization=1, module=T):
     return module.log(x*initial_normalization)
 
@@ -223,7 +377,6 @@ norms and distances
 -------------------
 """
 
-@track_model
 def L1(parameters):
     parameters = convert(parameters, Sequence)
     summed_up = 0
@@ -233,7 +386,7 @@ def L1(parameters):
         summed_up += abs(p).sum()
     return summed_up / n
 
-@track_model
+
 def L2(parameters):
     parameters = convert(parameters, Sequence)
     summed_up = 0
@@ -244,12 +397,9 @@ def L2(parameters):
     return summed_up / n
 
 
-def norm_distance(norm=L2):
-    @track_model
-    def distance(targets, outputs):
-        """ targets and outputs are assumed to be *lists* of theano variables """
-        return norm([t - o for t, o in izip(targets, outputs)])
-    return distance
+def norm_distance(targets, outputs, norm=L2):
+    """ targets and outputs are assumed to be *lists* of theano variables """
+    return norm([t - o for t, o in izip(targets, outputs)])
 
 
 """
@@ -257,7 +407,6 @@ reshape helpers
 ---------------
 """
 
-@track_model
 def total_size(variables):
     """ clones by default, as this function is usually used when something is meant to be replaced afterwards """
     variables = convert(variables, Sequence)
@@ -267,7 +416,7 @@ def total_size(variables):
         sizes = [clone(v).size for v in variables]
     return reduce(op.add, sizes)  # for generality to also include numerical sizes
 
-@track_model
+
 def complex_reshape(vector, variables):
     """ reshapes vector into elements with shapes like variables
 
@@ -300,6 +449,7 @@ def complex_reshape(vector, variables):
 higher level helpers
 --------------------
 """
+
 def fct_to_inputs_outputs(th_graph):
     """ generic helper function to get inputs and outputs from a given ... """
     if isinstance(th_graph, Function):

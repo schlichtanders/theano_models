@@ -8,6 +8,7 @@ import theano
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myfunctools import convert
 from schlichtanders.mylists import return_list, as_list
+from schlichtanders.mymeta import Proxifier
 from theano import gof
 import theano.tensor as T
 from base import Model, Merge, models_as_outputs, inputting_references, outputting_references
@@ -136,12 +137,8 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
         raise ValueError("Only an inputting reference makes sense for `randomize_key`.")
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
-    if hasattr(Y, 'loglikelihood'):
-        # variational lower bound detected
-        raise RuntimeError("Cannot perform variational lower bound twice on the same Y.")
-        # reason: we don't want/cannot redo the proxifying, hence when executing variational_bayes a second time on the
-        # same randomize_key, the OLD Xs get substituted, which probably aren't part of the second call at all.
-        # this side effect cannot be intended
+    if any(isinstance(y, Proxifier) for y in Y[randomize_key]):
+        raise RuntimeError("Y[%s] is already proxified. It is usually not intended to proxify things twice." % randomize_key)
 
     # Preprocess args
     # ---------------
@@ -152,6 +149,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     # paper "Blundell et al. (2015) Weight uncertainty in neural networks"
     # [if we would be able to do math on Theano variables (or use sympy variables for everything)
     # we could also compute the Kullback-Leibler divergence symbolically, however this is not (yet?) the case]
+    add_refs = {}
     if kl_prior is None:
         # as we assume independent sub distribution,
         # the overall log_prior_distr or log_posterior_distr can be computed as a sum of the single log
@@ -169,16 +167,16 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
                 X.logP['inputs'] = X
                 yield X.logP['outputs']
 
-        Y['logposterior'] = T.add(*log_posterior())
-        Y['logprior'] = T.add(*log_prior())
-        kl_prior = Y['logposterior'] - Y['logprior']
+        add_refs['logposterior'] = T.add(*log_posterior())
+        add_refs['logprior'] = T.add(*log_prior())
+        kl_prior = add_refs['logposterior'] - add_refs['logprior']
 
     # core variational bayes
     # ----------------------
-    Y['kl_prior'] = kl_prior
+    add_refs['kl_prior'] = kl_prior
 
     Y.loglikelihood = Y.logP
-    if "n_data" not in Y:
+    if "n_data" not in Y:  # this needs to be referenced in Y, as also Y's logP is updated
         Y['n_data'] = theano.shared(1, "n_data")  # needs to be updated externally, therefore real theano.shared variable here
 
     Y[randomize_key] = Xs  # make original parameters random
@@ -187,7 +185,7 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
     subgraphs += Xs
     subgraphs += priors
     merge = Merge(*(sg for sg in subgraphs if isinstance(sg, Model)),
-                  name="variational_lower_bound")
+                  name="variational_lower_bound", **add_refs)
 
     # the variational lower bound as approximation of logP:
     logP = Merge(Y.loglikelihood, name="variational_lower_bound.logP", ignore_references=outputting_references, track=True,

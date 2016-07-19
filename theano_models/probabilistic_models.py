@@ -15,6 +15,7 @@ from theano.printing import Print
 from base import Model, Merge, models_as_outputs, inputting_references, outputting_references
 from base_tools import as_merge
 from schlichtanders.mydicts import update
+from theano_models.util.theano_helpers import broadcastable_to_idx, unbroadcastable_to_idx
 from util import as_tensor_variable, U
 from itertools import izip
 
@@ -130,13 +131,28 @@ However for the optimizer it is of course crucial, and here the respective optim
 
 
 class StandardGaussian(Model):
-    def __init__(self, output_shape, rng=None):
+    def __init__(self, output_shape=tuple(), rng=None, broadcastable=tuple()):
+        """ standard distributed independent gaussians
+
+        Parameters
+        ----------
+        output_shape
+        broadcastable : tuple of bool
+            broadcastable belongs to the type in theano, however when working with shapes instead of types, this information
+            is in fact lost. We need to reinforce it to ensure consitent types (the error message theano throws is even not
+            indicating this error source, making it enormously worse working with inconsistent types)
+            So always give the broadcastable pattern if it is not False everywhere
+        rng : random number generator
+        """
         self.rng = rng or RNG
+        noise = self.rng.normal(output_shape, dtype=config.floatX)
+        noise = T.addbroadcast(noise, *broadcastable_to_idx(broadcastable))  # default to doing nothing
+        noise = T.unbroadcast(noise, *unbroadcastable_to_idx(broadcastable))
         super(StandardGaussian, self).__init__(
             inputs=[],
-            outputs=self.rng.normal(output_shape, dtype=config.floatX)
+            outputs=noise
         )
-        rv = self['outputs'].type("rv")
+        rv = noise.type("rv")
         self.logP = Model(
             inputs=[rv],
             outputs=(
@@ -197,8 +213,7 @@ class GaussianNoise(Model):
             # TODO ensure that input does not get another shape!!!
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
-
-        self.noise = StandardGaussian(input.shape, self.rng)['outputs']  # everything elementwise # TODO dtype needed?
+        self.noise = StandardGaussian(input.shape, self.rng, broadcastable=input.broadcastable)['outputs']
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(GaussianNoise, self).__init__(
@@ -272,7 +287,7 @@ class DiagGaussianNoise(Model):
 
         self.var = as_tensor_variable(init_var, "var")  # may use symbolic shared variable
 
-        self.noise = StandardGaussian(input.shape, self.rng)['outputs']  # everything elementwise # TODO dtype needed?
+        self.noise = StandardGaussian(input.shape, self.rng, broadcastable=input.broadcastable)['outputs']
         outputs = input + T.sqrt(self.var) * self.noise  # random sampler
 
         super(DiagGaussianNoise, self).__init__(

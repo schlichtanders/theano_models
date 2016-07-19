@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import operator as op
+import traceback
 from collections import Sequence
 from itertools import izip, repeat
 
@@ -39,7 +40,7 @@ Standard Loss
 """
 
 
-def loss_deterministic(model, distance=norm_distance()):
+def loss_deterministic(model, distance=norm_distance):
     """ builds premap for a standard deterministic model
 
     Parameters
@@ -315,11 +316,12 @@ def numericalize(loss, parameters,
 
         except (KeyError, TypeError, ValueError) as e:
             raise KeyError("Key '%s' not computable. Internal Error: %s" % (key, e))
-        except AssertionError:
+        except AssertionError as e:
             # TODO got the following AssertionError which seems to be a bug deep in theano/proxifying theano
             # "Scan has returned a list of updates. This should not happen! Report this to theano-users (also include the script that generated the error)"
             # for now we ignore this
-            raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future.")
+            raise
+            raise KeyError("Internal Theano AssertionError. Hopefully, this will get fixed in the future. Internal Error: %s" % traceback.format_exc())
 
     return DefaultDict(  # DefaultDict will save keys after they are called the first time
         default_getitem=get_numericalized,
