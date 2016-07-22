@@ -29,7 +29,7 @@ from schlichtanders.myfunctools import fmap, convert, as_wrapper, decorator_from
 
 from util import clone, as_tensor_variable, shallowflatten_keep_vars, deepflatten_keep_vars, U, reset_eval
 from util.theano_helpers import is_clonable, get_graph_inputs, clone_all, is_pseudo_constant, unbroadcastable_to_idx, \
-    broadcastable_to_idx
+    broadcastable_to_idx, theano_proxify
 import types
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -278,46 +278,50 @@ class Model(MutableMapping):
         # substitution of theano variables
         # ================================
         # reshape constant dimension:
-        def len_min_sum(iterable):
-            return len(iterable) - sum(iterable)
 
-        def new_reshaped():
-            for o, n in izip(old, new):
-                if (o.broadcastable != n.broadcastable
-                        and len_min_sum(o.broadcastable) == len_min_sum(n.broadcastable)):  # counts False
-                    idx = itertools.count()
-                    def broadcast_pattern():
-                        for b in o.broadcastable:
-                            if b:
-                                yield 'x'
-                            else:
-                                yield next(idx)
-                    yield n.squeeze().dimshuffle(*broadcast_pattern())
-                else:
-                    yield n
-
-        def new_rebroadcasted():
-            for o, n in izip(old, new):
-                n = T.addbroadcast(n, *broadcastable_to_idx(o.broadcastable))
-                n = T.unbroadcast(n, *unbroadcastable_to_idx(o.broadcastable))
-                yield n
-
-        original_new = new
-        new = list(new_reshaped())
-        if self.weak_identity_check:
-            assert all(o.dtype == n.dtype for o, n in izip(old, new)), "same dtype needed"
-            assert all(len(o.broadcastable) == len(n.broadcastable) for o, n in izip(old, new)), "same dimensionality needed"
-            # same broadcastable dimensions are still ensured to get theano type consistency
-            new = list(new_rebroadcasted())
-        else:
-            assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as theano types differ"
-            # this means that also broadcastables match
+        # def len_min_sum(iterable):
+        #     return len(iterable) - sum(iterable)
+        #
+        # def new_reshaped():
+        #     for o, n in izip(old, new):
+        #         if (o.broadcastable != n.broadcastable
+        #                 and len_min_sum(o.broadcastable) == len_min_sum(n.broadcastable)):  # counts False
+        #             idx = itertools.count()
+        #             def broadcast_pattern():
+        #                 for b in o.broadcastable:
+        #                     if b:
+        #                         yield 'x'
+        #                     else:
+        #                         yield next(idx)
+        #             yield n.squeeze().dimshuffle(*broadcast_pattern())
+        #         else:
+        #             yield n
+        #
+        # def new_rebroadcasted():
+        #     for o, n in izip(old, new):
+        #         n = T.addbroadcast(n, *broadcastable_to_idx(o.broadcastable))
+        #         n = T.unbroadcast(n, *unbroadcastable_to_idx(o.broadcastable))
+        #         yield n
+        #
+        # original_new = new
+        # new = list(new_reshaped())
+        # if self.weak_identity_check:
+        #     assert all(o.dtype == n.dtype for o, n in izip(old, new)), "same dtype needed"
+        #     assert all(len(o.broadcastable) == len(n.broadcastable) for o, n in izip(old, new)), "same dimensionality needed"
+        #     # same broadcastable dimensions are still ensured to get theano type consistency
+        #     new = list(new_rebroadcasted())
+        # else:
+        #     assert all(o.type == n.type for o, n in izip(old, new)), "No substitution as theano types differ"
+        #     # this means that also broadcastables match
+        # for o, n in izip(old, new):
+        #     proxify(o, n)
+        # self.references[key] = original_new[0] if old_singleton else original_new
 
         for o, n in izip(old, new):
-            proxify(o, n)
+            theano_proxify(o, n, weak_identity=self.weak_identity_check)
 
         # ensure matching between models:
-        self.references[key] = original_new[0] if old_singleton else original_new
+        self.references[key] = new[0] if old_singleton else new
         # make sure that simply all cached compiled functions get destroyed, as references are no longer valid
         reset_eval(self)
 

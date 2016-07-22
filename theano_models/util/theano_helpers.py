@@ -20,6 +20,7 @@ import theano
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myfunctools import convert
 from schlichtanders.mylists import remove_duplicates, shallowflatten, add_up
+from schlichtanders.mymeta import proxify, Proxifier
 from theano import config, gof, clone as _clone
 import theano.tensor as T
 from theano.tensor.basic import as_tensor_variable as _as_tensor_variable
@@ -37,6 +38,71 @@ from theano import tensor
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
+
+"""
+major proxifying
+================
+"""
+
+def is_theano_proxified(o):
+    return isinstance(o, Proxifier) or (hasattr(o, 'proxified') and o.proxified)
+
+def theano_proxify(o, n, weak_identity=True, reproxify="ignore"):
+    """ wrapper arround proxify to handle theano specifities, especially type consistency
+
+    Parameters
+    ----------
+    o : theano variable
+        to be proxified
+    n : theano variable
+        target
+    weak_identity : bool
+        indicating whether additional clear manipulations should be applied to make n having the same type as o
+        (e.g. adapting broadcasting, which is usually wanted)
+    reproxify : str
+        indicating what shell be done when a proxified ``o`` is be proxified again
+        possible values ("warn", "raise", "print", "ignore")
+
+    Returns
+    -------
+    proxified ``o`` in analogy to ``proxify``
+
+    """
+    if is_theano_proxified(o):
+        if reproxify == "raise":
+            raise RuntimeError(
+                "(%s) is already proxified. It is sometimes not intended to proxify things twice." % o)
+        elif reproxify == "warn":
+            warnings.warn("(%s) is already proxified. It is sometimes not intended to proxify things twice." % o)
+        elif reproxify == "print":
+            print("(%s) is already proxified. It is sometimes not intended to proxify things twice." % o)
+        #else do nothing
+
+    def len_min_sum(iterable):
+        return len(iterable) - sum(iterable)
+
+    n.proxified = True  # only needed for week identity, but may be useful for both
+    if weak_identity:
+        name = n.name
+        if (o.broadcastable != n.broadcastable
+                and len_min_sum(o.broadcastable) == len_min_sum(n.broadcastable)):  # counts False
+            idx = itertools.count()
+
+            def broadcast_pattern():
+                for b in o.broadcastable:
+                    if b:
+                        yield 'x'
+                    else:
+                        yield next(idx)
+
+            n = n.squeeze().dimshuffle(*broadcast_pattern())
+        if o.broadcastable != n.broadcastable:
+            n = T.addbroadcast(n, *broadcastable_to_idx(o.broadcastable))
+            n = T.unbroadcast(n, *unbroadcastable_to_idx(o.broadcastable))
+        n.name = name
+
+    assert o.type == n.type, "No proxifying as theano types differ. %s != %s" % (o.type, n.type)
+    return proxify(o, n)
 
 """
 some bug fixes

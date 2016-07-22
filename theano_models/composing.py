@@ -15,6 +15,7 @@ from base import Model, Merge, models_as_outputs, inputting_references, outputti
 from collections import Sequence
 
 from base_tools import total_size, as_merge
+from theano_models.util.theano_helpers import is_theano_proxified
 from util import as_tensor_variable, shallowflatten_keep_vars
 from numbers import Number
 
@@ -137,8 +138,8 @@ def variational_bayes(Y, randomize_key, Xs, priors=None, kl_prior=None):
         raise ValueError("Only an inputting reference makes sense for `randomize_key`.")
     if kl_prior is None and priors is None:
         raise ValueError("Either prior or kl_prior must be given")
-    if any(isinstance(y, Proxifier) for y in Y[randomize_key]):
-        raise RuntimeError("Y[%s] is already proxified. It is usually not intended to proxify things twice." % randomize_key)
+    if any(is_theano_proxified(y) for y in convert(Y[randomize_key], list)):
+        raise RuntimeError("Y[%s] is already proxified. For variational lower bound it is usually not intended to proxify things twice." % randomize_key)
 
     # Preprocess args
     # ---------------

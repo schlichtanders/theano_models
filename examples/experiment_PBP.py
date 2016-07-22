@@ -15,6 +15,7 @@ inf = float("inf")
 
 from schlichtanders.myfunctools import compose, meanmap, summap, compose_fmap, Average
 from schlichtanders.mygenerators import eatN, chunk, chunk_list, every, takeN
+from schlichtanders.myobjects import NestedNamespace, Namespace
 
 import theano_models as tm
 import theano_models.deterministic_models as dm
@@ -37,7 +38,6 @@ tm.inputting_references, tm.outputting_references
 
 EPS = 1e-8
 
-from schlichtanders.myobjects import NestedNamespace
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
 __file__ = os.path.realpath(__file__)
@@ -47,12 +47,19 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-suffix = "_"+sys.argv[1] if len(sys.argv) > 1 else "_several"
+suffix = "_"+sys.argv[2] if len(sys.argv) > 2 else "_several"
+datasetname = sys.argv[1] if len(sys.argv) > 1 else "boston"
+
+class Track(object):
+    def __getattr__(self, item):
+        return tm.track_model(getattr(tm, item))
+track = Track()
 
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
 #     datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "winered", "yacht"]
-datasetname = "concrete"
+# datasetname = "concrete"
+
 
 Z, X = getattr(data, "_" + datasetname)()
 # normalization is standard in Probabilistic Backpropagation Paper
@@ -73,7 +80,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, 'experiment_PBP_square%s_errors.txt' % suffix), "a") as myfile:
+        with open(os.path.join(__path__, 'experiment_final%s_errors.txt' % suffix), "a") as myfile:
             error = """
 %s
 ------------
@@ -84,14 +91,15 @@ ORIGINAL ERROR: %s""" % (title, pformat(hyper.__dict__), traceback.format_exc())
 
 # # Hyperparameters
 
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment_PBP_square%s.db' % suffix))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment_final%s.db' % suffix))
 Base = declarative_base(bind=engine)
 
 
 class RandomHyper(Base):
     __tablename__ = "hyper"
     id = Column(Integer, primary_key=True)
-    
+
+
     # hyper parameters:
     datasetname = Column(String)
     max_epochs_without_improvement = Column(Integer)
@@ -107,54 +115,6 @@ class RandomHyper(Base):
     opt_offset = Column(Float)
     opt_decay = Column(Float)
     opt_step_rate = Column(Float)
-    
-    # normflows:
-    normflows_best_val_loss = Column(Float)
-    normflows_best_parameters = Column(PickleType, nullable=True)
-    normflows_train_loss = Column(PickleType)
-    normflows_val_loss = Column(PickleType)
-    normflows_epochs = Column(Integer)
-    normflows_adapt_init_params = Column(PickleType, nullable=True)
-
-    # normflows2:
-    normflows2_best_val_loss = Column(Float)
-    normflows2_best_parameters = Column(PickleType, nullable=True)
-    normflows2_train_loss = Column(PickleType)
-    normflows2_val_loss = Column(PickleType)
-    normflows2_epochs = Column(Integer)
-    normflows2_adapt_init_params = Column(PickleType, nullable=True)
-
-    # normflows det:
-    normflowsdet_best_val_loss = Column(Float)
-    normflowsdet_best_parameters = Column(PickleType, nullable=True)
-    normflowsdet_train_loss = Column(PickleType)
-    normflowsdet_val_loss = Column(PickleType)
-    normflowsdet_epochs = Column(Integer)
-    normflowsdet_adapt_init_params = Column(PickleType, nullable=True)
-
-    # normflows det2:
-    normflowsdet2_best_val_loss = Column(Float)
-    normflowsdet2_best_parameters = Column(PickleType, nullable=True)
-    normflowsdet2_train_loss = Column(PickleType)
-    normflowsdet2_val_loss = Column(PickleType)
-    normflowsdet2_epochs = Column(Integer)
-    normflowsdet2_adapt_init_params = Column(PickleType, nullable=True)
-
-    # mixture:
-    mixture_best_val_loss = Column(Float)
-    mixture_best_parameters = Column(PickleType, nullable=True)
-    mixture_train_loss = Column(PickleType)
-    mixture_val_loss = Column(PickleType)
-    mixture_epochs = Column(Integer)
-    mixture_adapt_init_params = Column(PickleType, nullable=True)
-
-    # normflows maximum likelihood:
-    normflowsml_best_val_loss = Column(Float)
-    normflowsml_best_parameters = Column(PickleType, nullable=True)
-    normflowsml_train_loss = Column(PickleType)
-    normflowsml_val_loss = Column(PickleType)
-    normflowsml_epochs = Column(Integer)
-    baseline_adapt_init_params = Column(PickleType, nullable=True)
 
     # baseline:
     baseline_best_val_loss = Column(Float)
@@ -162,7 +122,80 @@ class RandomHyper(Base):
     baseline_train_loss = Column(PickleType)
     baseline_val_loss = Column(PickleType)
     baseline_epochs = Column(Integer)
-    baseline_adapt_init_params = Column(PickleType, nullable=True)
+    baseline_init_params = Column(PickleType, nullable=True)
+    baseline_val_error_rate = Column(Float)
+
+    # planarflow:
+    planarflow_best_val_loss = Column(Float)
+    planarflow_best_parameters = Column(PickleType, nullable=True)
+    planarflow_train_loss = Column(PickleType)
+    planarflow_val_loss = Column(PickleType)
+    planarflow_epochs = Column(Integer)
+    planarflow_init_params = Column(PickleType, nullable=True)
+    planarflow_val_error_rate = Column(Float)
+
+    # planarflow deterministic:
+    planarflowdet_best_val_loss = Column(Float)
+    planarflowdet_best_parameters = Column(PickleType, nullable=True)
+    planarflowdet_train_loss = Column(PickleType)
+    planarflowdet_val_loss = Column(PickleType)
+    planarflowdet_epochs = Column(Integer)
+    planarflowdet_init_params = Column(PickleType, nullable=True)
+    planarflowdet_val_error_rate = Column(Float)
+
+    # planarflow maximum likelihood:
+    planarflowml_best_val_loss = Column(Float)
+    planarflowml_best_parameters = Column(PickleType, nullable=True)
+    planarflowml_train_loss = Column(PickleType)
+    planarflowml_val_loss = Column(PickleType)
+    planarflowml_epochs = Column(Integer)
+    planarflowml_init_params = Column(PickleType, nullable=True)
+    planarflowml_val_error_rate = Column(Float)
+
+    # radialflow:
+    radialflow_best_val_loss = Column(Float)
+    radialflow_best_parameters = Column(PickleType, nullable=True)
+    radialflow_train_loss = Column(PickleType)
+    radialflow_val_loss = Column(PickleType)
+    radialflow_epochs = Column(Integer)
+    radialflow_init_params = Column(PickleType, nullable=True)
+    radialflow_val_error_rate = Column(Float)
+
+    # radialflow deterministic:
+    radialflowdet_best_val_loss = Column(Float)
+    radialflowdet_best_parameters = Column(PickleType, nullable=True)
+    radialflowdet_train_loss = Column(PickleType)
+    radialflowdet_val_loss = Column(PickleType)
+    radialflowdet_epochs = Column(Integer)
+    radialflowdet_init_params = Column(PickleType, nullable=True)
+    radialflowdet_val_error_rate = Column(Float)
+
+    # radialflow maximum likelihood:
+    radialflowml_best_val_loss = Column(Float)
+    radialflowml_best_parameters = Column(PickleType, nullable=True)
+    radialflowml_train_loss = Column(PickleType)
+    radialflowml_val_loss = Column(PickleType)
+    radialflowml_epochs = Column(Integer)
+    radialflowml_init_params = Column(PickleType, nullable=True)
+    radialflowml_val_error_rate = Column(Float)
+
+    # mixture:
+    mixture_best_val_loss = Column(Float)
+    mixture_best_parameters = Column(PickleType, nullable=True)
+    mixture_train_loss = Column(PickleType)
+    mixture_val_loss = Column(PickleType)
+    mixture_epochs = Column(Integer)
+    mixture_init_params = Column(PickleType, nullable=True)
+    mixture_val_error_rate = Column(Float)
+
+    # mixture:
+    mixtureml_best_val_loss = Column(Float)
+    mixtureml_best_parameters = Column(PickleType, nullable=True)
+    mixtureml_train_loss = Column(PickleType)
+    mixtureml_val_loss = Column(PickleType)
+    mixtureml_epochs = Column(Integer)
+    mixtureml_init_params = Column(PickleType, nullable=True)
+    mixtureml_val_error_rate = Column(Float)
 
     def __init__(self, hyper_dict=None):  # we directly refer to dict as sqlalchemy deletes the dict once committed (probably for detecting changes
         if hyper_dict is not None:
@@ -201,13 +234,16 @@ class RandomHyper(Base):
     
     def init_results(self):
         # extra for being able to reset results for loaded hyperparameters
-        for prefix in ['normflows_', 'normflows2_', 'normflowsdet_', 'normflowsdet2_', 'mixture_', 'normflowsml_', 'baseline_']:
+        for prefix in ['baseline_', 'mixture_', 'mixtureml_',
+                       'planarflow_', 'planarflowdet_', 'planarflowml_',
+                       'radialflow_', 'radialflowdet_', 'radialflowml_']:
             setattr(self, prefix + "best_parameters", None)
             setattr(self, prefix + "best_val_loss", inf)
             setattr(self, prefix + "train_loss", [])
             setattr(self, prefix + "val_loss", [])
             setattr(self, prefix + "best_epoch", 0)
-            setattr(self, prefix + "adapt_init_params ", None)
+            setattr(self, prefix + "init_params ", None)
+            setattr(self, prefix + "val_error_rate", inf)
 
 Base.metadata.create_all()
 Session = sessionmaker(bind=engine)
@@ -230,16 +266,14 @@ def optimize(prefix, loss, parameters):
 
     assert len(list(weights_regularizer_1epoch())) == n_batches
 
-    adapt_init_params = np.random.normal(size=ps.size, scale=0.1)
-    setattr(hyper, prefix + "adapt_init_params", adapt_init_params)
     optimizer_kwargs = tm.numericalize(loss, parameters,
         batch_mapreduce=summap,
         annealing_combiner=tm.AnnealingCombiner(
             weights_regularizer=cycle(weights_regularizer_1epoch())
         ),
-        adapt_init_params=lambda ps: ps + adapt_init_params,
+        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5),  # better more initial randomness
     #     profile=True,
-    #     mode='FAST_COMPILE',
+        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',  # error that theano cannot handle ufuncs with more than 32 arguments
     )
 
     opt = optimizer(
@@ -253,6 +287,7 @@ def optimize(prefix, loss, parameters):
     )
 
     # start values:
+    setattr(hyper, prefix + "init_params", copy(opt.wrt))
     setattr(hyper, prefix + "best_val_loss ",
             optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True))
 
@@ -274,8 +309,11 @@ def optimize(prefix, loss, parameters):
         # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
         # train_losses.append(training_loss)
 
+    # TODO add accuracy / error rate
     sql_session.commit()  # this updates all set information within sqlite database
 
+
+# TODO add radial flow
 
 def optimizeExp(prefix, loss, parameters):
     if prefix and not prefix.endswith("_"):  # source of bugs
@@ -287,6 +325,8 @@ def optimizeExp(prefix, loss, parameters):
 
     optimizer_kwargs = tm.numericalizeExp(loss, parameters,
         adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.1),
+        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
+        # error that theano cannot handle ufuncs with more than 32 arguments
     )
 
     opt = optimizer(
@@ -328,6 +368,10 @@ def optimizeExp(prefix, loss, parameters):
 # Main Loop
 # =========
 
+# capital, as these construct models
+Reparam = tm.as_proxmodel('parameters')(tm.prox_reparameterize)
+Flat = tm.as_proxmodel("to_be_randomized")(tm.prox_flatten)
+
 while True:
     for _i in range(3):  # repeat, taking slightly different starting parameters each time
         if _i == 0:
@@ -336,15 +380,16 @@ while True:
             pprint(hyper_dict)
             sql_session.add(hyper)
         else:
-            hyper = RandomHyper(hyper_dict)
+            hyper = RandomHyper(hyper_dict) # new hyper with same parameters
             sql_session.add(hyper)
 
         # reset hard the saved models:
         dm.InvertibleModel.INVERTIBLE_MODELS = []
         tm.Model.all_models = []
 
-        # baseline run
-        # ============
+
+        # baseline
+        # ========
 
         with log_exceptions("baseline"):
             # this is extremely useful to tell everything the default sizes
@@ -358,26 +403,24 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor,
-                               tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            params = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
-
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2 * hyper.minus_log_s)))
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            params = pm.DiagGauss(output_size=_total_size)
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-            loss = tm.loss_variational(_model)
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("baseline", loss, flat)
 
-            optimize("baseline", loss, _model['flat'])
 
-        # Model Normalizing flow
-        # ======================
-        with log_exceptions("normflows"):
+        # planarflow
+        # ==========
+        with log_exceptions("planarflow"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -389,32 +432,31 @@ while True:
                 hidden_transfers=["rectifier"]*1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            params_base = pm.StandardGaussian(output_shape=(tm.total_size(targets['to_be_randomized']),))
-            normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)] + [dm.LocScaleTransform(independent_scale=True)]
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            params_base = pm.DiagGauss(output_size=_total_size)
+            normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2* hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2* hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-
-            loss = tm.loss_variational(_model)
-
-            optimize("normflows", loss, _model['flat'])
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("planarflow", loss, flat)
 
 
-        # Model Normalizing flow 2
-        # ==========================
-        with log_exceptions("normflows2"):
+        # planarflow Deterministic
+        # ========================
+
+        with log_exceptions("planarflowdet"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -426,7 +468,43 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor, tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+            target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized") # rename inputs is crucial!!
+            for _ in range(hyper.n_normflows - 1):
+                target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
+            # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
+
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            targets['to_be_randomized'] = target_normflow
+            targets = tm.Merge(targets, target_normflow)
+
+            params = pm.DiagGauss(output_size=_total_size)
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
+
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("planarflowdet", loss, flat)
+
+
+        # planarflow Maximum Likelihood
+        # =============================
+        with log_exceptions("planarflowml"):
+            # this is extremely useful to tell everything the default sizes
+            input = tm.as_tensor_variable(X[0], name="X")
+
+            predictor = dm.Mlp(
+                input=input,
+                output_size=Z.shape[1],
+                output_transfer='identity',
+                hidden_sizes=[hyper.units_per_layer] * 1,
+                hidden_transfers=["rectifier"] * 1
+            )
+            target_distribution = pm.DiagGaussianNoise(predictor)
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
             normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
@@ -435,22 +513,21 @@ while True:
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            targets['to_be_randomized'] = params
+            model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-            loss = tm.loss_variational(_model)
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimizeExp("planarflowml", loss, flat)
 
-            optimize("normflows2", loss, _model['flat'])
 
-
-        # Model Normalizing flow Deterministic
-        # ====================================
-        with log_exceptions("normflowsdet"):
+        # radialflow
+        # ==========
+        with log_exceptions("radialflow"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -462,35 +539,32 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized")
-            for _ in range(hyper.n_normflows - 1):
-                target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
-            target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            targets = tm.Merge(target_distribution, predictor,
-                               tm.Flatten(predictor['parameters']))
-            total_size = tm.total_size(targets['flat'])
-            targets['flat'] = target_normflow
-            targets = tm.Merge(targets, target_normflow)
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            params_base = pm.DiagGauss(output_size=_total_size)
+            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows)]
+            # LocScaleTransform for better working with PlanarTransforms
+            params = params_base
+            for transform in normflows:
+                params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            params = pm.StandardGaussian(output_shape=(total_size,))
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model,
-                              tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("radialflow", loss, flat)
 
-            loss = tm.loss_variational(_model)
 
-            optimize("normflowsdet", loss, _model['flat'])
+        # radialflow Deterministic
+        # ========================
 
-        # Model Normalizing flow 2
-        # ==========================
-        with log_exceptions("normflowsdet2"):
+        with log_exceptions("radialflowdet"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -502,30 +576,63 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-
-            target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized")
+            target_normflow = tm.Merge(dm.PlanarTransform(),
+                                       inputs="to_be_randomized")  # rename inputs is crucial!!
             for _ in range(hyper.n_normflows - 1):
-                target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
+                target_normflow = tm.Merge(dm.RadialTransform(target_normflow), target_normflow)
+            # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
 
-            targets = tm.Merge(target_distribution, predictor,
-                               tm.Flatten(predictor['parameters']))
-            total_size = tm.total_size(targets['flat'])
-            targets['flat'] = target_normflow
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            targets['to_be_randomized'] = target_normflow
             targets = tm.Merge(targets, target_normflow)
 
-            params = pm.DiagGauss(output_size=total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2 * hyper.minus_log_s)))
+            params = pm.DiagGauss(output_size=_total_size)
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model,
-                              tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-            loss = tm.loss_variational(_model)
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("radialflowdet", loss, flat)
 
-            optimize("normflowsdet2", loss, _model['flat'])
+
+        # radialflow Maximum Likelihood
+        # =============================
+        with log_exceptions("radialflowml"):
+            # this is extremely useful to tell everything the default sizes
+            input = tm.as_tensor_variable(X[0], name="X")
+
+            predictor = dm.Mlp(
+                input=input,
+                output_size=Z.shape[1],
+                output_transfer='identity',
+                hidden_sizes=[hyper.units_per_layer] * 1,
+                hidden_transfers=["rectifier"] * 1
+            )
+            target_distribution = pm.DiagGaussianNoise(predictor)
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+
+            params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
+            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
+            # LocScaleTransform for better working with PlanarTransforms
+            params = params_base
+            for transform in normflows:
+                params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
+
+            targets['to_be_randomized'] = params
+            model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
+
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimizeExp("radialflowml", loss, flat)
 
 
         # Mixture
@@ -542,31 +649,28 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor,
-                               tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             # the number of parameters comparing normflows and mixture of gaussians match perfectly (the only exception is
             # that we spend an additional parameter when modelling n psumto1 with n parameters instead of (n-1) within softmax
-            total_size = tm.total_size(targets['to_be_randomized'])
-            mixture_comps = [pm.DiagGauss(output_size=total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            mixture_comps = [pm.DiagGauss(output_size=_total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
             params = pm.Mixture(*mixture_comps)
-            prior = tm.fix_params(pm.Gauss(output_shape=(tm.total_size(targets['to_be_randomized']),),
-                                           init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
 
-            _model = model
-            _model = tm.Merge(_model,
-                              tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv),
-                              tm.Reparameterize(_model['parameters_psumto1'], tm.softmax, tm.softmax_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-            loss = tm.loss_variational(_model)
-
-            optimize("mixture", loss, _model['flat'])
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("mixture", loss, flat)
 
 
-        # Normflows Maximum Likelihood
-        # ============================
-        with log_exceptions("normflowsml"):
+        # Mixture Maximum Likelihood
+        # ==========================
+        with log_exceptions("mixtureml"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -578,24 +682,18 @@ while True:
                 hidden_transfers=["rectifier"] * 1
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor,
-                               tm.Flatten(predictor['parameters'], flat_key="to_be_randomized"))
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
-            normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
-            # LocScaleTransform for better working with PlanarTransforms
-            params = params_base
-            for transform in normflows:
-                params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
+            mixture_comps = [pm.DiagGauss(output_size=_total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
+            params = pm.Mixture(*mixture_comps)
 
             targets['to_be_randomized'] = params
             model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
 
-            _model = model
-            # _model = tm.Merge(_model, tm.Reparameterize(_model['parameters_positive'], tm.softplus, tm.softplus_inv))
-            _model = tm.Merge(_model,
-                              tm.Reparameterize(_model['parameters_positive'], tm.squareplus, tm.squareplus_inv))
-            _model = tm.Merge(_model, tm.Flatten(_model['parameters']))
-            loss = tm.loss_probabilistic(_model)
-
-            optimizeExp("normflowsml", loss, _model['flat'])
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimizeExp("mixtureml", loss, flat)

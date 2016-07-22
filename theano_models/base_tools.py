@@ -23,7 +23,8 @@ from theano.compile import Function
 
 from schlichtanders.myfunctools import convert
 from base import Model, Merge, get_inputting_references, get_outputting_references, model_to_output
-from theano_models.util.theano_helpers import broadcastable_to_idx, unbroadcastable_to_idx
+from theano_models.util.theano_helpers import broadcastable_to_idx, unbroadcastable_to_idx, theano_proxify, \
+    is_theano_proxified
 from util import as_tensor_variable, clone, deepflatten_keep_vars, is_clonable, clone_all
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -207,7 +208,7 @@ def prox_reparameterize(parameters, f, finv, givens={}):
     finv : function theano_variable -> theano_variable
     """
     parameters = convert(parameters, Sequence)
-    if any(isinstance(y, Proxifier) for y in parameters):
+    if any(is_theano_proxified(y) for y in parameters):
         raise RuntimeError(
             "parameters is already proxified. It is usually not intended to proxify things twice.")
     assert all(is_clonable(param) for param in parameters), (
@@ -226,10 +227,7 @@ def prox_reparameterize(parameters, f, finv, givens={}):
         underlying_p.name = p.name + "_" + f.func_name  # naming is not needed if f, finv are Models
         new_p = model_to_output(f(underlying_p))
         new_p.name = (p.name or str(p)) + "_reparam"
-        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
-        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
-        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
-        proxify(p, new_p)
+        theano_proxify(p, new_p)
         underlying_parameters.append(underlying_p)
     return underlying_parameters
 
@@ -239,7 +237,7 @@ def prox_center(parameters, givens={}):
 
     Tries to compute numeric value of the parameters, however if this is not possible, a symbolic copy is used. """
     parameters = convert(parameters, Sequence)
-    if any(isinstance(y, Proxifier) for y in parameters):
+    if any(is_theano_proxified(y) for y in parameters):
         raise RuntimeError(
             "parameters is already proxified. It is usually not intended to proxify things twice.")
     try:
@@ -256,10 +254,7 @@ def prox_center(parameters, givens={}):
     for p, z, cp in izip(parameters, zeros, copies):
         new_p = z + cp
         new_p.name = str(p) + "_centered"
-        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
-        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
-        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
-        proxify(p, new_p)
+        theano_proxify(p, new_p)
     return zeros
 
 
@@ -270,7 +265,7 @@ def prox_flatten(parameters, givens={}):
     try:
         if not isinstance(parameters, Sequence):
             raise ValueError("`parameters` is not Sequence. Nothing to flat.")
-        if any(isinstance(y, Proxifier) for y in parameters):
+        if any(is_theano_proxified(y) for y in parameters):
             raise RuntimeError(
                 "parameters is already proxified. It is usually not intended to proxify things twice.")
         flat_sym = T.concatenate([p.flatten() for p in parameters])
@@ -304,10 +299,7 @@ def prox_flatten(parameters, givens={}):
     for p, size, shape in izip(parameters, sizes, shapes):
         new_p = flat[i:i + size].reshape(shape)
         new_p.name = (p.name or str(p)) + "_flat"
-        # importantly we need to handle broadcastable as this was lost during numericalization, but belongs to the type
-        new_p = T.addbroadcast(new_p, *broadcastable_to_idx(p.broadcastable))
-        new_p = T.unbroadcast(new_p, *unbroadcastable_to_idx(p.broadcastable))
-        proxify(p, new_p)
+        theano_proxify(p, new_p)
         i += size
     return flat
 
@@ -502,6 +494,7 @@ def get_equiv_by_name(fct1, fct2):
             name_to_fct2[v2.name] = v2
 
     return {v1: name_to_fct2[n] for v1, n in fct1_to_name.iteritems()}
+
 
 
 
