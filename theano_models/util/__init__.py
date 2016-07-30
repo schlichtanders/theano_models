@@ -3,7 +3,10 @@
 from itertools import izip
 import theano.tensor as T
 from theano_helpers import (as_tensor_variable, clone, is_clonable, clone_all, PooledRandomStreams,
-                            get_graph_inputs, get_profile, clone_renew_rng, list_random_sources)
+                            get_graph_inputs, get_profile, clone_renew_rng, list_random_sources,
+                            independent_subgraphs, theano_proxify, is_theano_proxified,
+                            graphopt_merge_add_mul, independent_subgraphs_extend_add_mul,
+                            rebuild_graph, contains_node, contains_var)
 
 from theano import gof
 from collections import Sequence, MutableMapping

@@ -24,6 +24,7 @@ from theano_models import data
 
 from sklearn import cross_validation
 from theano.tensor.shared_randomstreams import RandomStreams
+import theano
 
 from sqlalchemy import Column, Integer, Unicode, UnicodeText, String, PickleType, Float, Boolean
 from sqlalchemy import create_engine
@@ -36,7 +37,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 tm.inputting_references.update(['to_be_randomized'])
 tm.inputting_references, tm.outputting_references
 
-EPS = 1e-8
+EPS = 1e-4
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
@@ -60,6 +61,8 @@ track = Track()
 #     datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "winered", "yacht"]
 # datasetname = "concrete"
 
+# TODO check planar flows, they don't work as expected... however radial flows work.. it is weird
+
 
 Z, X = getattr(data, "_" + datasetname)()
 # normalization is standard in Probabilistic Backpropagation Paper
@@ -80,7 +83,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, 'experiment_final%s_errors.txt' % suffix), "a") as myfile:
+        with open(os.path.join(__path__, 'experiment%s_errors.txt' % suffix), "a") as myfile:
             error = """
 %s
 ------------
@@ -89,9 +92,15 @@ ORIGINAL ERROR: %s""" % (title, pformat(hyper.__dict__), traceback.format_exc())
             myfile.write(error)
 
 
+def RMSE(PX, Z):
+    return np.sqrt(((PX - Z) ** 2).mean())
+
+def nRMSE(PX, Z):
+    return RMSE(PX*Z_std + Z_mean, Z*Z_std + Z_mean)
+
 # # Hyperparameters
 
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment_final%s.db' % suffix))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment%s.db' % suffix))
 Base = declarative_base(bind=engine)
 
 
@@ -103,7 +112,8 @@ class RandomHyper(Base):
     # hyper parameters:
     datasetname = Column(String)
     max_epochs_without_improvement = Column(Integer)
-    average_n = Column(Integer)
+    logP_average_n = Column(Integer)
+    errorrate_average_n = Column(Integer)
     units_per_layer = Column(Integer)
     minus_log_s = Column(Integer)
     batch_size = Column(Integer)
@@ -207,8 +217,10 @@ class RandomHyper(Base):
         self.datasetname = datasetname
         # hyper parameters:
         self.max_epochs_without_improvement = 30
-        self.batch_size = random.choice([1,10, 100])
-        self.average_n = 1
+        # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
+        self.batch_size = random.choice([2, 10, 100])
+        self.logP_average_n = 1
+        self.errorrate_average_n = 20
         self.units_per_layer = 50
         self.minus_log_s = random.choice([1,2,3,4,5,6,7])
         # the prior is learned together with the other models in analogy to the paper Probabilistic Backpropagation
@@ -252,7 +264,8 @@ sql_session = Session()
 
 # optimization routine
 # ====================
-def optimize(prefix, loss, parameters):
+def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
+    print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
         prefix += "_"
     tm.reduce_all_identities()
@@ -260,21 +273,35 @@ def optimize(prefix, loss, parameters):
     n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
     climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
-    def weights_regularizer_1epoch():
-        for i in range(1, n_batches+1):
-            yield 2**(n_batches - i) / (2**n_batches - 1)
+    if maximum_likelihood:
+        # TODO best_val_loss, i.e. num_loss seems to be too low for some reason
+        # ANSWER: this is due to meanexpmap which is applied in maximum_likelihood setting, which increases logprob,
+        #  i.e. decreases negative logporbability (compared to meanmap)
+        # This used because of the ratio estimator
+        optimizer_kwargs = tm.numericalizeExp(
+            loss, parameters,
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.1),
+            mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
+            # error that theano cannot handle ufuncs with more than 32 arguments
+        )
+    else:
+        def weights_regularizer_1epoch():
+            for i in range(1, n_batches + 1):
+                yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
 
-    assert len(list(weights_regularizer_1epoch())) == n_batches
-
-    optimizer_kwargs = tm.numericalize(loss, parameters,
-        batch_mapreduce=summap,
-        annealing_combiner=tm.AnnealingCombiner(
-            weights_regularizer=cycle(weights_regularizer_1epoch())
-        ),
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5),  # better more initial randomness
-    #     profile=True,
-        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',  # error that theano cannot handle ufuncs with more than 32 arguments
-    )
+        assert len(list(weights_regularizer_1epoch())) == n_batches
+        optimizer_kwargs = tm.numericalize(
+            loss, parameters,
+            batch_mapreduce=summap,
+            annealing_combiner=tm.AnnealingCombiner(
+                weights_regularizer=cycle(weights_regularizer_1epoch())
+            ),
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5),
+            # better more initial randomness
+            #     profile=True,
+            mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
+            # error that theano cannot handle ufuncs with more than 32 arguments
+        )
 
     opt = optimizer(
         identifier=hyper.opt_identifier,
@@ -286,19 +313,21 @@ def optimize(prefix, loss, parameters):
         **tm.climin_kwargs(optimizer_kwargs)
     )
 
+    val_kwargs = {} if maximum_likelihood else {'no_annealing': True}
     # start values:
     setattr(hyper, prefix + "init_params", copy(opt.wrt))
-    setattr(hyper, prefix + "best_val_loss ",
-            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True))
+    setattr(hyper, prefix + "best_val_loss",
+            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs))
 
     # val_losses = getattr(hyper, prefix + "val_loss")
     # train_losses = getattr(hyper, prefix + "train_loss")
     for info in every(n_batches, opt):
         current_epoch = info['n_iter']//n_batches
+        print current_epoch,
         if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, no_annealing=True)
+        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             setattr(hyper, prefix + "best_epoch", current_epoch)
             setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
@@ -308,59 +337,12 @@ def optimize(prefix, loss, parameters):
         # visualize training loss for comparison:
         # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
         # train_losses.append(training_loss)
-
-    # TODO add accuracy / error rate
-    sql_session.commit()  # this updates all set information within sqlite database
-
-
-# TODO add radial flow
-
-def optimizeExp(prefix, loss, parameters):
-    if prefix and not prefix.endswith("_"):  # source of bugs
-        prefix += "_"
-    tm.reduce_all_identities()
-
-    n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
-
-    optimizer_kwargs = tm.numericalizeExp(loss, parameters,
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.1),
-        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
-        # error that theano cannot handle ufuncs with more than 32 arguments
-    )
-
-    opt = optimizer(
-        identifier=hyper.opt_identifier,
-        step_rate=hyper.opt_step_rate,
-        momentum=hyper.opt_momentum,
-        decay=hyper.opt_decay,
-        offset=hyper.opt_offset,
-        args=climin_args,
-        **tm.climin_kwargs(optimizer_kwargs)
-    )
-
-    # start values:
-    setattr(hyper, prefix + "best_val_loss ",
-            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX))
-
-    # val_losses = getattr(hyper, prefix + "val_loss")
-    # train_losses = getattr(hyper, prefix + "train_loss")
-    for info in every(n_batches, opt):
-        current_epoch = info['n_iter']//n_batches
-        setattr(hyper, prefix + "epochs", current_epoch)
-        if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
-            break
-        # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX)
-        if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
-            setattr(hyper, prefix + "best_epoch", current_epoch)
-            setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
-            setattr(hyper, prefix + "best_val_loss", val_loss)
-        # val_losses.append(val_loss)
-
-        # visualize training loss for comparison:
-        # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-        # train_losses.append(training_loss)
+    print
+    # test error rate:
+    sampler = theano.function([parameters] + model['inputs'], model['outputs'])
+    PVX = np.array(
+        [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
+    setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
 
     sql_session.commit()  # this updates all set information within sqlite database
 
@@ -415,8 +397,8 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baseline", loss, flat)
-
+            optimize("baseline", model, loss, flat)
+            sql_session.commit()  # this updates all set information within sqlite database, but also deletes all respective hyperparameter information
 
         # planarflow
         # ==========
@@ -450,7 +432,7 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflow", loss, flat)
+            optimize("planarflow", model, loss, flat)
 
 
         # planarflow Deterministic
@@ -487,7 +469,7 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflowdet", loss, flat)
+            optimize("planarflowdet", model, loss, flat)
 
 
         # planarflow Maximum Likelihood
@@ -522,7 +504,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimizeExp("planarflowml", loss, flat)
+            optimize("planarflowml", model, loss, flat, maximum_likelihood=True)
 
 
         # radialflow
@@ -558,7 +540,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflow", loss, flat)
+            optimize("radialflow", model, loss, flat)
 
 
         # radialflow Deterministic
@@ -597,7 +579,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflowdet", loss, flat)
+            optimize("radialflowdet", model, loss, flat)
 
 
         # radialflow Maximum Likelihood
@@ -632,7 +614,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimizeExp("radialflowml", loss, flat)
+            optimize("radialflowml", model, loss, flat, maximum_likelihood=True)
 
 
         # Mixture
@@ -665,7 +647,7 @@ while True:
             all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("mixture", loss, flat)
+            optimize("mixture", model, loss, flat)
 
 
         # Mixture Maximum Likelihood
@@ -696,4 +678,4 @@ while True:
             all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimizeExp("mixtureml", loss, flat)
+            optimize("mixtureml", model, loss, flat, maximum_likelihood=True)

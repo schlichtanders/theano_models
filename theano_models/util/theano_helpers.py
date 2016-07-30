@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function, division
 import sys
-
+import operator as op
 import itertools
 from six import integer_types
 from collections import Sequence, OrderedDict, defaultdict
@@ -19,7 +19,7 @@ import numpy as np
 import theano
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myfunctools import convert
-from schlichtanders.mylists import remove_duplicates, shallowflatten, add_up
+from schlichtanders.mylists import remove_duplicates, shallowflatten, add_up, remove, getall
 from schlichtanders.mymeta import proxify, Proxifier
 from theano import config, gof, clone as _clone
 import theano.tensor as T
@@ -36,6 +36,10 @@ from theano.compile import SharedVariable, rebuild_collect_shared, Function
 from theano.compile.profilemode import ProfileMode
 from theano import tensor
 
+from schlichtanders.mylists import remove_duplicates
+
+from theano.tensor.elemwise import Elemwise
+from theano import scalar
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 
 
@@ -46,6 +50,8 @@ major proxifying
 
 def is_theano_proxified(o):
     return isinstance(o, Proxifier) or (hasattr(o, 'proxified') and o.proxified)
+
+theano.tensor.opt.local_add_mul_fusion
 
 def theano_proxify(o, n, weak_identity=True, reproxify="ignore"):
     """ wrapper arround proxify to handle theano specifities, especially type consistency
@@ -204,8 +210,11 @@ clone with replacing random variables
 """
 
 
+def is_random_variable(v):
+    return hasattr(v, 'rng')
+
 def list_random_sources(outputs):
-    return list(gen_variables(outputs, yield_on=lambda v: hasattr(v, 'rng')))
+    return list(gen_variables(outputs, yield_on=lambda v: is_random_variable(v)))
 
 
 @wraps(clone)
@@ -629,7 +638,6 @@ intersecting graphs
 ===================
 """
 
-
 def independent_subgraphs(inputs1, inputs2, outputs):
     """
     computes subgraphs for inputs1 only and inputs2 only
@@ -650,11 +658,15 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     # precomputable and those which are not
 
     outputs = convert(outputs, Sequence)
-    for n in gen_nodes(outputs):
-        for i in n.inputs:
-            if not hasattr(i, '_clients'):
-                i._clients = set()
-            i._clients.add(n)
+    if not hasattr(outputs[0], 'clients'):
+        print("SETTING CLIENTS")
+        for n in gen_nodes(outputs):
+            for i, inp in enumerate(n.inputs):
+                if not hasattr(inp, 'clients'):
+                    inp.clients = []
+                inp.clients.append((n,i))
+        for i, out in enumerate(outputs):
+            out.client = "output", i
 
     # reversed descendants as we will search from outputs backwards:
     descendants1 = _collect_descendants(inputs1)[::-1]
@@ -667,7 +679,7 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     # ------------------------
     agenda = list(outputs)
     remove_duplicates(agenda)
-    uniques = set()  # pass each variable (at most) once
+    uniques = set(agenda)  # pass each variable (at most) once
     while agenda:
         o = agenda.pop(0)
         in1, in2 = True, True
@@ -690,6 +702,7 @@ def independent_subgraphs(inputs1, inputs2, outputs):
                     agenda.append(i)
                     uniques.add(i)
         # else  not in1 and not in2 -> nothing to do
+
     return independent_subgraphs1, independent_subgraphs2
 
 
@@ -699,7 +712,7 @@ def _collect_descendants(inputs):
     uniques = set(descendants)
     for d in descendants:
         try:
-            for n in d._clients:
+            for n,i in d.clients:
                 for o in n.outputs:
                     if o not in uniques:
                         descendants.append(o)
@@ -709,11 +722,171 @@ def _collect_descendants(inputs):
     return descendants  # unique and width-first sorted variables
 
 
+def contains_node(top_expressions, sub_expression):
+    try:
+        next(gen_nodes(top_expressions, yield_on=lambda v:v==sub_expression))
+        return True
+    except StopIteration:
+        return False
+
+def contains_var(top_expressions, sub_expression):
+    try:
+        next(gen_variables(top_expressions, yield_on=lambda v:v==sub_expression))
+        return True
+    except StopIteration:
+        return False
+
+def independent_subgraphs_extend_add_mul(sub):
+    """ extends a subgraph (list of theano variables, labeled with `_clients`
+    towards their use in subsequent add/mul operators
+
+    This is meant to be combined with local_add_mul_fusion"""
+    # TODO include constants within add/mul extension
+    if not hasattr(sub[0], 'clients'):
+        raise ValueError("need client information. E.g. run gof.FunctionGraph before")
+    
+    all_client_nodes = reduce(op.add, ([c[0] for c in s.clients] for s in sub))
+    all_client_nodes = remove_duplicates(all_client_nodes)
+    # further remove all clients which part of another sub (this may happen as a free variable can also be used within a more complex sub)
+    remove(all_client_nodes, key=lambda c: contains_node(sub, c))
+
+    new_sub = []
+    for node in all_client_nodes:
+        if isinstance(node.op, Elemwise) and isinstance(node.op.scalar_op, (scalar.Add, scalar.Mul)):
+            sub_i = []
+            other_i = []
+            for i in node.inputs:
+                if i in sub:
+                    sub_i.append(i)
+                else:
+                    other_i.append(i)
+
+            assert len(other_i) >= 1, "if not, this node should have been part of sub before"
+            if len(sub_i) >= 2:  # only if there is something to precompute, do the subgraph splitting
+                s = node.op(*sub_i)
+                new_sub.append(s)
+                other_i.append(s)  # add it to other, so that it gets included
+                new = node.op(*other_i)
+                # update _clients
+                for inp in sub_i + other_i[:-1]:
+                    remove(inp.clients, key=lambda c: c[0] == node)
+                for i, inp in enumerate(sub_i):
+                    inp.clients.append((s.owner, i))
+                for i, inp in enumerate(other_i[:-1]):  # don't include the last one, as this our new sub graph
+                    inp.clients.append((new.owner, i))
+
+                s.clients = [(new.owner, len(other_i)-1)]
+                theano_proxify(node.outputs[0], new)  # add has only one output
+            else:
+                new_sub += sub_i
+        else:
+            new_sub += [i for i in node.inputs if i in sub]
+    # remove duplicates
+    new_sub = remove_duplicates(new_sub)
+
+    # remove nested nodes
+    i = 0
+    while i < len(new_sub):
+        s = new_sub[i]
+        rest = new_sub[:i] + new_sub[i+1:]
+        everywhere_nested = False
+        if rest:
+            everywhere_nested = all(contains_node(r, n) for n, _i in s.clients for r in rest)
+        if everywhere_nested:
+            del new_sub[i]
+        else:
+            i += 1
+    return new_sub
+
+
+def graphopt_merge_add_mul(inputs, outputs):
+    mode = theano.compile.get_mode(None)
+    everything_before_fusion = theano.compile.optdb.query(mode._optimizer, position_cutoff=49)
+    # opt_merge = theano.gof.MergeOptimizer()  # theano.compile.optdb['merge1']
+    # opt_canonicalize = theano.compile.optdb['canonicalize'].query(mode._optimizer)
+    opt_add_mul_fusion = theano.tensor.opt.FusionOptimizer(theano.tensor.opt.local_add_mul_fusion)
+
+    # stabilize = theano.compile.optdb['stabilize'].query(mode._optimizer)
+    # print theano.compile.optdb['elemwise_fusion'].__position__
+    # elemwise_fusion = theano.compile.optdb['elemwise_fusion'].query(mode._optimizer, position_cutoff=0.5)
+
+    fg = theano.gof.FunctionGraph(inputs, outputs)
+    # opt_merge(fg)
+    # opt_canonicalize(fg)
+    # opt_merge(fg)
+    everything_before_fusion(fg)
+    opt_add_mul_fusion(fg)
+    # no further elemwise opt fusion
+    return fg.inputs, fg.outputs
+
+
+def rebuild_graph(inputs, outputs, *func_rebuilding):
+    """ rebuild a graph represented by inputs, outputs, taking care of shared variables and random variables
+
+    func_rebuilding work on FunctionGraph representation
+
+    Parameters
+    ----------
+    all_inputs : list of theano.function inputs
+        these are subgroups of inputs which should be preserved
+    all_outputs : list of theano.function inputs
+    func_rebuilding : homomorphisms func(inputs, outputs) -> inputs, outputs
+        are applied in order
+        can work on function graphs, i.e. don't have to handle shared variables or random variables
+
+    Returns
+    -------
+    all_inputs, all_outputs, givens
+    remapped versions plus givens, which need to be used when creating functions from the remappings
+    (concerning shared variables and random variables)
+    """
+    Ni = len(inputs)
+    placeholder_i = []
+    placeholder_vars = []
+    placeholder_orig = []
+    for i, v in enumerate(inputs):
+        if isinstance(v, SharedVariable) or is_random_variable(v):
+            _v = v.type()
+            placeholder_i.append(i)
+            placeholder_vars.append(_v)
+            placeholder_orig.append(v)
+            inputs[i] = _v
+
+    # add all not listed shared variables to the replacements (i.e. also not nested in the until now)
+    extra_shared_orig = [v for v in gof.graph.inputs(outputs)
+                         if isinstance(v, SharedVariable) and not contains_var(placeholder_orig, v)]
+    extra_shared_vars = [v.type() for v in extra_shared_orig]
+    placeholder_orig += extra_shared_orig
+    placeholder_vars += extra_shared_vars
+    placeholder_i += range(Ni, Ni+len(extra_shared_vars))
+    inputs += extra_shared_vars  # add them to inputs so that if they are changed, we can track the change
+
+    replace_dict = dict(izip(placeholder_orig, placeholder_vars))
+
+    for i, v in enumerate(outputs):
+        with ignored(KeyError):
+            outputs[i] = replace_dict[v]
+
+    inputs, outputs, extras = rebuild_collect_shared(outputs, inputs=inputs, replace=replace_dict, copy_inputs_over=False)
+    # pre-optimize the graph, merging add and mul operators
+    for f in func_rebuilding:
+        inputs, outputs = f(inputs, outputs)
+
+    placeholder_vars = getall(inputs, placeholder_i)  # might have changed concrete references
+    reverse_dict = dict(izip(placeholder_vars, placeholder_orig))
+    # TODO there are problems when using givens in theano.function. Concretely are random variables updated despite they
+    # are not even included in the subgraph (some updating rules seem to get falsely copied)
+    return inputs[:Ni], outputs, reverse_dict  # still best
+    # TODO there are also problems when using theano.clone(..., replace=...) this doesn't preserve references of random variables... weird
+    # outputs = theano.clone(outputs, replace=reverse_dict)
+    # inputs = [reverse_dict[i] if i in reverse_dict else i for i in inputs[:Ni]]
+    # return inputs, outputs
+
+
 """
 Profiling
 =========
 """
-
 
 def get_profile(fct):
     if isinstance(fct, Function):

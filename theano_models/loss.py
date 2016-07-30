@@ -5,12 +5,13 @@ import operator as op
 import traceback
 from collections import Sequence
 from itertools import izip, repeat
+import warnings
 
 import numpy as np
 import theano
 import theano.tensor as T
 from schlichtanders.mycontextmanagers import ignored
-from schlichtanders.mylists import as_list
+from schlichtanders.mylists import as_list, deflatten
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
 from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp
@@ -19,8 +20,10 @@ from util import list_random_sources
 from base import Model, Merge, outputting_references
 from base_tools import norm_distance, L2
 from theano.gof.fg import MissingInputError
-from theano_models.util.theano_helpers import independent_subgraphs
+from theano_models.util.theano_helpers import independent_subgraphs, graphopt_merge_add_mul, \
+    independent_subgraphs_extend_add_mul, rebuild_graph
 from util import clone_renew_rng
+from theano.compile import SharedVariable, rebuild_collect_shared
 
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
@@ -174,7 +177,7 @@ generating numerical loss functions
 def numericalize(loss, parameters,
                  annealing_combiner=None, wrapper=lambda f:f,
                  initial_givens={}, adapt_init_params=lambda ps: ps,
-                 batch_common_rng=True, batch_mapreduce=None, batch_precompile=None,
+                 batch_common_rng=True, batch_mapreduce=None, batch_precompile=True,
                  **theano_function_kwargs):
     """ Produces interface for standard numerical optimizer
 
@@ -203,9 +206,8 @@ def numericalize(loss, parameters,
     batch_common_rng : bool
         indicating whether same random number shall be used for the whole batch (True)
         or that random number generator shall be updated for each sample separately (False)
-    batch_precompile : dict (key: bool)
-        key must correspond to output key
-        precompilation means, that everything related to the parameters only is precomputed per batch
+    batch_precompile : bool
+        precompilation (True) means, that everything related to the parameters only is precomputed per batch
 
     theano_function_kwargs : dict
         additional arguments passed to theano.function
@@ -214,88 +216,75 @@ def numericalize(loss, parameters,
     -------
     DefaultDict over model
     """
+    # Parameter Preprocessing
+    # -----------------------
     assert (not isinstance(parameters, Sequence)), "Currently only single theano expression for parameters is supported."
-    if batch_precompile is None:
-        batch_precompile = {'num_loss': True, 'num_jacobian': False, 'num_hessian': False}
-    else:
-        for key, v in {'num_loss': True, 'num_jacobian': False, 'num_hessian': False}.iteritems():
-            if key not in batch_precompile:
-                batch_precompile[key] = v
+    if batch_mapreduce is None:
+        # no precompile, if there is nothing to map upon
+        batch_precompile = False
+    elif batch_common_rng:
+        # precompile of there is something to map, and if same random numbers shall be used in every sample
+        if not batch_precompile:
+            warnings.warn("``batch_common_rng=True`` and ``batch_mapreduce`` require ``batch_precompile=True``,"
+                          "as the latter is reset to ``True`` (was False)")
+        batch_precompile = True
 
+    theano_function_kwargs['on_unused_input'] = "ignore"
+    theano_function_kwargs['allow_input_downcast'] = True
+
+    def theano_function(*args, **kwargs):
+        update(kwargs, theano_function_kwargs, overwrite=False)
+        return wrapper(theano.function(*args, **kwargs))
+
+    # Core
+    # ----
     derivatives = {
         "num_loss": lambda key: loss[key],
         "num_jacobian": lambda key: theano.grad(loss[key], parameters, disconnected_inputs="warn"),
         "num_hessian": lambda key: theano.gradient.hessian(loss[key], parameters)
     }
 
-    theano_function_kwargs['on_unused_input'] = "ignore"
-    theano_function_kwargs['allow_input_downcast'] = True
-    def theano_function(*args, **kwargs):
-        update(kwargs, theano_function_kwargs, overwrite=False)
-        return wrapper(theano.function(*args, **kwargs))
-
-    def _numericalize(outputs, precompile):
-        """ compiles function with signature f(params, *loss_inputs) """
-
-        # error prone, therefore deprecated for now
-        '''
-        if pre_compile == "build_batch_theano_graph":  # batch_size != None must be ensured (see ValueError above)
-            # TODO this pattern seems to be useful very very often, however compilation time is almost infinite (felt like that)
-            # TODO ask on theano, whether this pattern can be made more efficient
-            # build new loss_inputs with extra dimension (will be regarded as first dimension)
-            batch_loss_inputs = [T.TensorType(i.dtype, i.broadcastable + (False,))(i.name + ("" if i.name is None else "R"))
-                                for i in model['loss_inputs']]
-            def clones():
-                for i in xrange(batch_size):
-                    yield clone_renew_rng(outputs, replace=dict(izip(model['loss_inputs'], [a[i] for a in batch_loss_inputs])))
-            batch_outputs = T.add(*clones())
-            f = theano_function([parameters] + batch_loss_inputs, batch_outputs)
-        '''
-        if (precompile and batch_mapreduce is not None) or (batch_common_rng and batch_mapreduce is not None):
-            # we need to handle randomness per sample
-            # this is  not used for now and not for the ideal case, hence deprecated
-            '''
-            # using model['noise'] is confusing when using another rng in the background, as then the randomness occurs
-            # before and hence can go into ``sub``
-            # therefore we always search for rng automatically
-            if pre_compile == "use_compiled_functions":
-                singleton = not isinstance(outputs, Sequence)
-                _f = theano_function([parameters] + loss['inputs'], outputs)
-                noise_source = []
-                for i, s in izip(_f.maker.inputs, _f.input_storage):
-                    if s.data is not None:
-                        if str(i.variable) == '<RandomStateType>':
-                            noise_source.append(i.variable)
-                outputs = [o.variable for o in _f.maker.outputs]
-                if singleton:
-                    outputs = outputs[0]
-            else:
-                # standard precompile version, note that this can be significantly slower than without using any precompile
-                noise_source = list_random_sources(outputs)
-            '''
+    def _numericalize(output):
+        """ compiles function with signature f(num_params, *loss_inputs) """
+        if batch_precompile:
+            print "batch_precompile"
             # further the subgraph ``sub`` is computed
             # it includes everything needed for separating parameters from outputs
-            noise_source = list_random_sources(outputs)  # not dependend on anything
-            if batch_common_rng:
-                sub, _ = independent_subgraphs([parameters] + noise_source, loss['inputs'], outputs)
-            else:
-                sub, _ = independent_subgraphs([parameters], loss['inputs'] + noise_source, outputs)
-            fparam = theano_function([parameters], sub)
-            foutput = theano_function(sub + loss['inputs'], outputs)
+            noise_source = list_random_sources(output)  # not dependend on anything
+            inputs = [parameters] + loss['inputs'] + noise_source
+            inputs, outputs, givens = rebuild_graph(inputs, [output], graphopt_merge_add_mul)
+            _parameters, loss_inputs, noise_vars = deflatten(inputs, [parameters, loss['inputs'], noise_source])
+            output = outputs[0]
 
-            def f(parameters, *loss_inputs):
-                rparam = fparam(parameters)
+            # find respective subgraphs
+            if batch_common_rng:
+                sub, _ = independent_subgraphs([_parameters] + noise_vars, loss_inputs, outputs)
+                # extend subgraphs to include subparts of subsequent add/mul operators:
+                sub = independent_subgraphs_extend_add_mul(sub)
+                # build respective part-functions, applying full graph optimization on each
+                fparam = theano_function([_parameters], sub, givens=givens)
+                foutput = theano_function(sub + loss_inputs, output)
+            else:
+                sub, _ = independent_subgraphs([_parameters], loss_inputs + noise_vars, outputs)
+                # extend subgraphs to include subparts of subsequent add/mul operators:
+                sub = independent_subgraphs_extend_add_mul(sub)
+                # build respective part-functions, applying full graph optimization on each
+                fparam = theano_function([_parameters], sub)
+                foutput = theano_function(sub + loss_inputs, output, givens=givens)
+
+            def f(num_params, *loss_inputs):
+                num_sub = fparam(num_params)
                 def h(*inner_loss_inputs):
-                    return foutput(*(rparam + list(inner_loss_inputs)))
+                    return foutput(*(num_sub + list(inner_loss_inputs)))
                 return batch_mapreduce(h, *loss_inputs)
             f.wrapped = fparam, foutput
 
         else:  # this is to be erased as soon as pre_compilation is optimized
-            _f = theano_function([parameters] + loss['inputs'], outputs)
+            _f = theano_function([parameters] + loss['inputs'], output)
             if batch_mapreduce is not None:
-                def f(parameters, *loss_inputs):
+                def f(num_params, *loss_inputs):
                     def h(*inner_loss_inputs):
-                        return _f(parameters, *inner_loss_inputs)
+                        return _f(num_params, *inner_loss_inputs)
                     return batch_mapreduce(h, *loss_inputs)
                 f.wrapped = _f
             else:
@@ -308,13 +297,14 @@ def numericalize(loss, parameters,
         try:
             if annealing_combiner:
                 return annealing_combiner(
-                    _numericalize(derivatives[key]("loss_data"), batch_precompile[key]),
+                    _numericalize(derivatives[key]("loss_data")),
                     theano_function([parameters], derivatives[key]("loss_regularizer"))
                 )
             else:
-                return _numericalize(derivatives[key]("outputs"), batch_precompile[key])
+                return _numericalize(derivatives[key]("outputs"))
 
         except (KeyError, TypeError, ValueError) as e:
+            raise
             raise KeyError("Key '%s' not computable. Internal Error: %s" % (key, e))
         except AssertionError as e:
             # TODO got the following AssertionError which seems to be a bug deep in theano/proxifying theano
@@ -336,7 +326,6 @@ def numericalize(loss, parameters,
 def numericalizeExp(loss, parameters,
                  annealing_combiner=None, wrapper=lambda f: f,
                  initial_givens={}, adapt_init_params=lambda ps: ps,
-                 batch_precompile=True,
                  **theano_function_kwargs):
     """ Produces interface for standard numerical optimizer
 
@@ -384,29 +373,47 @@ def numericalizeExp(loss, parameters,
         ret = {}
         # loss
         # ----
-        outputs = - loss[loss_key]  # minus is important for meanexpmap
-        noise_source = list_random_sources(outputs)  # not dependend on anything
-        sub, _ = independent_subgraphs([parameters], loss['inputs'] + noise_source, outputs)
-        logP_fparam = theano_function([parameters], sub)
-        logP_foutput = theano_function(sub + loss['inputs'], outputs)
+        noutput = - loss[loss_key]  # minus is important for meanexpmap, negative output
 
-        def f(parameters, *loss_inputs):
-            rparam = logP_fparam(parameters)
+        noise_source = list_random_sources(noutput)  # not dependend on anything
+        inputs = [parameters] + loss['inputs'] + noise_source
+        inputs, noutputs, ngivens = rebuild_graph(inputs, [noutput], graphopt_merge_add_mul)
+        _parameters, loss_inputs, noise_vars = deflatten(inputs, [parameters, loss['inputs'], noise_source])
+        noutput = noutputs[0]
+
+        # we need distinct random numbers everywhere for the ratio estimator:
+        nsub, _ = independent_subgraphs([_parameters], loss_inputs + noise_vars, noutput)
+        nsub = independent_subgraphs_extend_add_mul(nsub)
+
+        nfparam = theano_function([_parameters], nsub)  # negative function parameter part
+        nfoutput = theano_function(nsub + loss_inputs, noutput, givens=ngivens)  # negative function output part
+
+        def f(num_params, *loss_inputs):
+            nnum_sub = nfparam(num_params)
             def h(*inner_loss_inputs):
-                return logP_foutput(*(rparam + list(inner_loss_inputs)))
+                return nfoutput(*(nnum_sub + list(inner_loss_inputs)))  # returns logP
             return - meanexpmap(h, *loss_inputs)  # mirrows the minus in the beginning
-        f.wrapped = logP_fparam, logP_foutput
+        f.wrapped = nfparam, nfoutput
         ret['num_loss'] = f
 
         # derivative:
         # -----------
-        outputs = theano.grad(loss[loss_key], parameters, disconnected_inputs="warn")
-        noise_source = list_random_sources(outputs)  # not dependend on anything
-        sub, _ = independent_subgraphs([parameters], loss['inputs'] + noise_source, outputs)
-        fparam = theano_function([parameters], sub)
-        foutput = theano_function(sub + loss['inputs'], outputs)
+        # NOTE: we cannot reuse the above theano expressions, as graph optimization may lead non gradiable nodes
 
-        def f(parameters, *loss_inputs):
+        doutput = theano.grad(loss[loss_key], parameters, disconnected_inputs="warn")  # -output = loss[loss_key] (with add/mul merged)
+        noise_source = list_random_sources(doutput)  # not dependend on anything  # should be the same as above
+        inputs = [parameters] + loss['inputs'] + noise_source
+        inputs, doutputs, dgivens = rebuild_graph(inputs, [doutput], graphopt_merge_add_mul)
+        _parameters, loss_inputs, noise_vars = deflatten(inputs, [parameters, loss['inputs'], noise_vars])
+        doutput = doutputs[0]
+
+        # we need distinct random numbers everywhere for the ratio estimator:
+        dsub, _ = independent_subgraphs([_parameters], loss_inputs + noise_vars, doutput)
+        dsub = independent_subgraphs_extend_add_mul(dsub)
+        dfparam = theano_function([_parameters], dsub)
+        dfoutput = theano_function(dsub + loss_inputs, doutput, givens=dgivens)
+
+        def df(num_params, *loss_inputs):
             def fix_type(x):
                 if hasattr(x, 'next'):  # no generators, as we need the information twice
                     return list(x)
@@ -414,14 +421,14 @@ def numericalizeExp(loss, parameters,
                     return x
                 raise RuntimeError("This should not happen. Iterable types are expected as loss_inputs.")
             loss_inputs = map(fix_type, loss_inputs)  # we use this 2 times, i.e. generators are not useful
-            logP_rparam = logP_fparam(parameters)
+            nnum_sub = nfparam(num_params)
             def h_logP(*inner_loss_inputs):
-                return logP_foutput(*(logP_rparam + list(inner_loss_inputs)))
+                return nfoutput(*(nnum_sub + list(inner_loss_inputs)))
             log_Ps = np.asarray(map(h_logP, *loss_inputs))
 
-            rparam = fparam(parameters)
+            dnum_sub = dfparam(num_params)
             def h_derv(*inner_loss_inputs):
-                return foutput(*(rparam + list(inner_loss_inputs)))
+                return dfoutput(*(dnum_sub + list(inner_loss_inputs)))
             log_derivatives = np.asarray(map(h_derv, *loss_inputs))
             N = len(log_Ps)
             assert N == len(log_derivatives), "this should be the same"
@@ -437,8 +444,8 @@ def numericalizeExp(loss, parameters,
             # _cov = (xs - xs_mean) * (log_derivatives - log_derivatives.mean(axis=0))
             # return ys.sum()/xs_sum - _cov.mean(axis=0)/xs_mean
 
-        f.wrapped = fparam, foutput
-        ret['num_jacobian'] = f
+        df.wrapped = dfparam, dfoutput
+        ret['num_jacobian'] = df
         return ret
 
     if annealing_combiner:
