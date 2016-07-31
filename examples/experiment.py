@@ -48,7 +48,7 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-suffix = "_"+sys.argv[2] if len(sys.argv) > 2 else "_several"
+filename = sys.argv[2] if len(sys.argv) > 2 else "several"
 datasetname = sys.argv[1] if len(sys.argv) > 1 else "boston"
 
 class Track(object):
@@ -83,7 +83,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, 'experiment%s_errors.txt' % suffix), "a") as myfile:
+        with open(os.path.join(__path__, 'experiment', '%s_errors.txt' % filename), "a") as myfile:
             error = """
 %s
 ------------
@@ -99,15 +99,15 @@ def nRMSE(PX, Z):
     return RMSE(PX*Z_std + Z_mean, Z*Z_std + Z_mean)
 
 # # Hyperparameters
-
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment%s.db' % suffix))
+with ignored(OSError):
+    os.mkdir(os.path.join(__path__, 'experiment'))
+engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment', '%s.db' % filename))
 Base = declarative_base(bind=engine)
 
 
 class RandomHyper(Base):
     __tablename__ = "hyper"
     id = Column(Integer, primary_key=True)
-
 
     # hyper parameters:
     datasetname = Column(String)
@@ -218,7 +218,8 @@ class RandomHyper(Base):
         # hyper parameters:
         self.max_epochs_without_improvement = 30
         # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
-        self.batch_size = random.choice([2, 10, 100])
+        # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
+        self.batch_size = random.choice([1, 10, 50, 100])
         self.logP_average_n = 1
         self.errorrate_average_n = 20
         self.units_per_layer = 50
