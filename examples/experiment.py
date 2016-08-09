@@ -308,7 +308,7 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
     print
     if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
         # test error rate:
-        sampler = theano.function([parameters] + model['inputs'], model['outputs'])
+        sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
         PVX = np.array(
             [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
         setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
