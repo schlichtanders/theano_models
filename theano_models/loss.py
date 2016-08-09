@@ -313,7 +313,7 @@ def numericalize(loss, parameters,
                         def logP_logDerivative():
                             for _ in xrange(exp_average_n):
                                 yield __f(num_params, *loss_inputs)
-                        log_Ps, log_derivatives = list(zip(*logP_logDerivative()))
+                        log_Ps, log_derivatives = zip(*list(logP_logDerivative()))
                         log_Ps, log_derivatives = np.asarray(log_Ps), np.asarray(log_derivatives)
                         N = len(log_Ps)
                         assert N == len(log_derivatives), "this should be the same"
