@@ -169,7 +169,7 @@ class RandomHyper(Base):
         # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
         # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
         self.batch_size = random.choice([1, 10, 50, 100])
-        self.logP_average_n = random.choice([1,10])
+        self.logP_average_n = 1  # TODO random.choice([1,10])
         self.errorrate_average_n = 20
         self.exp_average_n = 20
         self.exp_ratio_estimator = random.choice([None, "grouping", "firstorder"])
@@ -219,7 +219,7 @@ sql_session = Session()
 
 # optimization routine
 # ====================
-def optimize(prefix, model, loss, parameters, type='annealing', maximum_likelihood=False):
+def optimize(prefix, model, loss, parameters, type='annealing'):
     print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
         prefix += "_"
@@ -277,8 +277,10 @@ def optimize(prefix, model, loss, parameters, type='annealing', maximum_likeliho
     setattr(hyper, prefix + "init_params", copy(opt.wrt))
     setattr(hyper, prefix + "best_val_loss",
             optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-            if hyper.logP_average_n <= 1 or maximum_likelihood else  # maximum_likelihood already averages over each single data point
-            Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
+            )
+            # TODO include this:
+            # if hyper.logP_average_n <= 1 or type.startswith("ml") else  # maximum_likelihood already averages over each single data point
+            # Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
 
     # val_losses = getattr(hyper, prefix + "val_loss")
     # train_losses = getattr(hyper, prefix + "train_loss")
@@ -288,10 +290,12 @@ def optimize(prefix, model, loss, parameters, type='annealing', maximum_likeliho
         if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
-        if hyper.logP_average_n <= 1 or maximum_likelihood:  # maximum_likelihood already averages over each single data point
-            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-        else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
-            val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
+        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+        # TODO include this
+        # if hyper.logP_average_n <= 1 or type.startswith("ml"):  # maximum_likelihood already averages over each single data point
+        #     val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+        # else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
+        #     val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             setattr(hyper, prefix + "best_epoch", current_epoch)
             setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array

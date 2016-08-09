@@ -33,6 +33,3 @@ reduce_all_identities = check_all_identities  # almost DEPRECATED
 
 __author__ = 'Stephan Sahm <Stephan.Sahm@gmx.de>'
 # TODO for documentation using sphinx ``__all__ = ...`` is needed
-
-
-T.shape
