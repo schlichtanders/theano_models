@@ -306,8 +306,8 @@ def numericalize(loss, parameters,
                 elif key_degree == "num_jacobian":
                     Output = derivatives["num_loss"](key_loss)  # stammfunktion, therefore capital
 
-                    __f = theano.function([parameters] + loss['inputs'],
-                                         [Output, output])  # TODO the parameters part could be precompiled in principle
+                    __f = theano.function([parameters] + loss['inputs'], [Output, output], **theano_function_kwargs)
+                    # TODO the parameters part could be precompiled in principle
 
                     def _f(num_params, *loss_inputs):
                         def logP_logDerivative():
