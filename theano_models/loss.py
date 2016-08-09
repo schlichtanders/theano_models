@@ -304,7 +304,7 @@ def numericalize(loss, parameters,
                     _f = theano_function([parameters] + loss['inputs'], output)  # TODO the parameters part could be precompiled in principle
                     _f = lift(_f, AverageExp(exp_average_n))
                 elif key_degree == "num_jacobian":
-                    Output = derivatives["num_loss"][key_loss]  # stammfunktion, therefore capital
+                    Output = derivatives["num_loss"](key_loss)  # stammfunktion, therefore capital
 
                     __f = theano.function([parameters] + loss['inputs'],
                                          [Output, output])  # TODO the parameters part could be precompiled in principle
