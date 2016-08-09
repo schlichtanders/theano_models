@@ -3,6 +3,7 @@ from __future__ import division
 
 import contextlib
 import os, platform, sys, traceback
+from functools import partial
 from pprint import pformat, pprint
 import numpy as np
 from climin.util import optimizer
@@ -48,8 +49,19 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-filename = sys.argv[2] if len(sys.argv) > 2 else "several"
-datasetname = sys.argv[1] if len(sys.argv) > 1 else "boston"
+# defaults:
+foldername = "experiment"
+filename = "several"
+datasetname = "boston"
+
+#overwrite as far as given:
+if sys.argv > 3:
+    foldername, filename, datasetname = sys.argv[1:4]
+elif sys.argv > 2:
+    filename, datasetname = sys.argv[1:3]
+elif sys.argv > 1:
+    datasetname = sys.argv[1]
+
 
 class Track(object):
     def __getattr__(self, item):
@@ -58,10 +70,10 @@ track = Track()
 
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
-#     datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "winered", "yacht"]
-# datasetname = "concrete"
+#     datasetnames = ["boston", "concrete", "energy", "kin8nm", "powerplant", "winered", "yacht"]
 
-# TODO check planar flows, they don't work as expected... however radial flows work.. it is weird
+# "naval" is not possible as standardization leads to a nan column. Hence we do not know which to use
+# datasetname = "concrete"
 
 
 Z, X = getattr(data, "_" + datasetname)()
@@ -76,6 +88,8 @@ Z = (Z - Z_mean) / Z_std
 X, TX, Z, TZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 10% test used in paper
 X, VX, Z, VZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 20% validation used in paper
 
+# TODO the above randomly splits the dataset, which should be averaged out ideally... however with same initial parameters... that makes it difficult
+
 @contextlib.contextmanager
 def log_exceptions(title, *exceptions):
     if not exceptions:
@@ -83,7 +97,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, 'experiment', '%s_errors.txt' % filename), "a") as myfile:
+        with open(os.path.join(__path__, foldername, '%s_errors.txt' % filename), "a") as myfile:
             error = """
 %s
 ------------
@@ -100,8 +114,8 @@ def nRMSE(PX, Z):
 
 # # Hyperparameters
 with ignored(OSError):
-    os.mkdir(os.path.join(__path__, 'experiment'))
-engine = create_engine('sqlite:///' + os.path.join(__path__, 'experiment', '%s.db' % filename))
+    os.mkdir(os.path.join(__path__, foldername))
+engine = create_engine('sqlite:///' + os.path.join(__path__, foldername, '%s.db' % filename))
 Base = declarative_base(bind=engine)
 
 
@@ -114,7 +128,9 @@ class RandomHyper(Base):
     max_epochs_without_improvement = Column(Integer)
     logP_average_n = Column(Integer)
     errorrate_average_n = Column(Integer)
+    exp_average_n = Column(Integer)
     units_per_layer = Column(Integer)
+    n_layers = Column(Integer)
     minus_log_s = Column(Integer)
     batch_size = Column(Integer)
     
@@ -126,86 +142,19 @@ class RandomHyper(Base):
     opt_decay = Column(Float)
     opt_step_rate = Column(Float)
 
-    # baseline:
-    baseline_best_val_loss = Column(Float)
-    baseline_best_parameters = Column(PickleType, nullable=True)
-    baseline_train_loss = Column(PickleType)
-    baseline_val_loss = Column(PickleType)
-    baseline_epochs = Column(Integer)
-    baseline_init_params = Column(PickleType, nullable=True)
-    baseline_val_error_rate = Column(Float)
-
-    # planarflow:
-    planarflow_best_val_loss = Column(Float)
-    planarflow_best_parameters = Column(PickleType, nullable=True)
-    planarflow_train_loss = Column(PickleType)
-    planarflow_val_loss = Column(PickleType)
-    planarflow_epochs = Column(Integer)
-    planarflow_init_params = Column(PickleType, nullable=True)
-    planarflow_val_error_rate = Column(Float)
-
-    # planarflow deterministic:
-    planarflowdet_best_val_loss = Column(Float)
-    planarflowdet_best_parameters = Column(PickleType, nullable=True)
-    planarflowdet_train_loss = Column(PickleType)
-    planarflowdet_val_loss = Column(PickleType)
-    planarflowdet_epochs = Column(Integer)
-    planarflowdet_init_params = Column(PickleType, nullable=True)
-    planarflowdet_val_error_rate = Column(Float)
-
-    # planarflow maximum likelihood:
-    planarflowml_best_val_loss = Column(Float)
-    planarflowml_best_parameters = Column(PickleType, nullable=True)
-    planarflowml_train_loss = Column(PickleType)
-    planarflowml_val_loss = Column(PickleType)
-    planarflowml_epochs = Column(Integer)
-    planarflowml_init_params = Column(PickleType, nullable=True)
-    planarflowml_val_error_rate = Column(Float)
-
-    # radialflow:
-    radialflow_best_val_loss = Column(Float)
-    radialflow_best_parameters = Column(PickleType, nullable=True)
-    radialflow_train_loss = Column(PickleType)
-    radialflow_val_loss = Column(PickleType)
-    radialflow_epochs = Column(Integer)
-    radialflow_init_params = Column(PickleType, nullable=True)
-    radialflow_val_error_rate = Column(Float)
-
-    # radialflow deterministic:
-    radialflowdet_best_val_loss = Column(Float)
-    radialflowdet_best_parameters = Column(PickleType, nullable=True)
-    radialflowdet_train_loss = Column(PickleType)
-    radialflowdet_val_loss = Column(PickleType)
-    radialflowdet_epochs = Column(Integer)
-    radialflowdet_init_params = Column(PickleType, nullable=True)
-    radialflowdet_val_error_rate = Column(Float)
-
-    # radialflow maximum likelihood:
-    radialflowml_best_val_loss = Column(Float)
-    radialflowml_best_parameters = Column(PickleType, nullable=True)
-    radialflowml_train_loss = Column(PickleType)
-    radialflowml_val_loss = Column(PickleType)
-    radialflowml_epochs = Column(Integer)
-    radialflowml_init_params = Column(PickleType, nullable=True)
-    radialflowml_val_error_rate = Column(Float)
-
-    # mixture:
-    mixture_best_val_loss = Column(Float)
-    mixture_best_parameters = Column(PickleType, nullable=True)
-    mixture_train_loss = Column(PickleType)
-    mixture_val_loss = Column(PickleType)
-    mixture_epochs = Column(Integer)
-    mixture_init_params = Column(PickleType, nullable=True)
-    mixture_val_error_rate = Column(Float)
-
-    # mixture:
-    mixtureml_best_val_loss = Column(Float)
-    mixtureml_best_parameters = Column(PickleType, nullable=True)
-    mixtureml_train_loss = Column(PickleType)
-    mixtureml_val_loss = Column(PickleType)
-    mixtureml_epochs = Column(Integer)
-    mixtureml_init_params = Column(PickleType, nullable=True)
-    mixtureml_val_error_rate = Column(Float)
+    for _prefix in ['baselinedet_', 'baselinedetplus_',
+                    'baseline_', 'baselineplus_',
+                    'mixture_', 'mixtureml_',
+                    'planarflow_', 'planarflowdet_', 'planarflowml_',
+                    'radialflow_', 'radialflowdet_', 'radialflowml_']:
+        exec("""
+{0}best_val_loss = Column(Float)
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}epochs = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)""".format(_prefix))
 
     def __init__(self, hyper_dict=None):  # we directly refer to dict as sqlalchemy deletes the dict once committed (probably for detecting changes
         if hyper_dict is not None:
@@ -220,9 +169,12 @@ class RandomHyper(Base):
         # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
         # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
         self.batch_size = random.choice([1, 10, 50, 100])
-        self.logP_average_n = 1
+        self.logP_average_n = random.choice([1,10])
         self.errorrate_average_n = 20
-        self.units_per_layer = 50
+        self.exp_average_n = 20
+        self.exp_ratio_estimator = random.choice([None, "grouping", "firstorder"])
+        self.n_layers = 1  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
+        self.units_per_layer = 50  # random.choice([50, 200]) - check whether baselineplus has an effect
         self.minus_log_s = random.choice([1,2,3,4,5,6,7])
         # the prior is learned together with the other models in analogy to the paper Probabilistic Backpropagation
         
@@ -247,7 +199,9 @@ class RandomHyper(Base):
     
     def init_results(self):
         # extra for being able to reset results for loaded hyperparameters
-        for prefix in ['baseline_', 'mixture_', 'mixtureml_',
+        for prefix in ['baselinedet_', 'baselinedetplus_',
+                       'baseline_', 'baselineplus_',
+                       'mixture_', 'mixtureml_',
                        'planarflow_', 'planarflowdet_', 'planarflowml_',
                        'radialflow_', 'radialflowdet_', 'radialflowml_']:
             setattr(self, prefix + "best_parameters", None)
@@ -255,7 +209,7 @@ class RandomHyper(Base):
             setattr(self, prefix + "train_loss", [])
             setattr(self, prefix + "val_loss", [])
             setattr(self, prefix + "best_epoch", 0)
-            setattr(self, prefix + "init_params ", None)
+            setattr(self, prefix + "init_params", None)
             setattr(self, prefix + "val_error_rate", inf)
 
 Base.metadata.create_all()
@@ -265,7 +219,7 @@ sql_session = Session()
 
 # optimization routine
 # ====================
-def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
+def optimize(prefix, model, loss, parameters, type='annealing', maximum_likelihood=False):
     print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
         prefix += "_"
@@ -274,35 +228,37 @@ def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
     n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
     climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
-    if maximum_likelihood:
-        # TODO best_val_loss, i.e. num_loss seems to be too low for some reason
-        # ANSWER: this is due to meanexpmap which is applied in maximum_likelihood setting, which increases logprob,
-        #  i.e. decreases negative logporbability (compared to meanmap)
-        # This used because of the ratio estimator
-        optimizer_kwargs = tm.numericalizeExp(
-            loss, parameters,
-            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.1),
-            mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
-            # error that theano cannot handle ufuncs with more than 32 arguments
+    if type == "ml": # maximum likelihood
+        numericalize_kwargs = dict(
+            batch_mapreduce=meanmap,
         )
-    else:
+    elif type == "ml_exp_average":
+        numericalize_kwargs = dict(
+            batch_mapreduce=meanmap,
+            exp_average_n=hyper.exp_average_n,
+            exp_ratio_estimator=hyper.exp_ratio_estimator,
+        )
+    elif type == "annealing":
         def weights_regularizer_1epoch():
             for i in range(1, n_batches + 1):
                 yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
-
         assert len(list(weights_regularizer_1epoch())) == n_batches
-        optimizer_kwargs = tm.numericalize(
-            loss, parameters,
-            batch_mapreduce=summap,
+        numericalize_kwargs = dict(
+            batch_mapreduce=summap,  # meaning is/must be done in Annealing
             annealing_combiner=tm.AnnealingCombiner(
                 weights_regularizer=cycle(weights_regularizer_1epoch())
             ),
-            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5),
-            # better more initial randomness
-            #     profile=True,
-            mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN',
-            # error that theano cannot handle ufuncs with more than 32 arguments
         )
+    else:
+        raise ValueError("Unkown type %s" % type)
+
+    optimizer_kwargs = tm.numericalize(
+        loss, parameters,
+        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
+        # profile=True,
+        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
+        **numericalize_kwargs
+    )
 
     opt = optimizer(
         identifier=hyper.opt_identifier,
@@ -314,11 +270,15 @@ def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
         **tm.climin_kwargs(optimizer_kwargs)
     )
 
-    val_kwargs = {} if maximum_likelihood else {'no_annealing': True}
+    val_kwargs = {}
+    if type == "annealing":
+        val_kwargs['no_annealing'] = True
     # start values:
     setattr(hyper, prefix + "init_params", copy(opt.wrt))
     setattr(hyper, prefix + "best_val_loss",
-            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs))
+            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            if hyper.logP_average_n <= 1 or maximum_likelihood else  # maximum_likelihood already averages over each single data point
+            Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
 
     # val_losses = getattr(hyper, prefix + "val_loss")
     # train_losses = getattr(hyper, prefix + "train_loss")
@@ -328,7 +288,10 @@ def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
         if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
             break
         # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+        if hyper.logP_average_n <= 1 or maximum_likelihood:  # maximum_likelihood already averages over each single data point
+            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+        else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
+            val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
         if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
             setattr(hyper, prefix + "best_epoch", current_epoch)
             setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
@@ -339,11 +302,12 @@ def optimize(prefix, model, loss, parameters, maximum_likelihood=False):
         # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
         # train_losses.append(training_loss)
     print
-    # test error rate:
-    sampler = theano.function([parameters] + model['inputs'], model['outputs'])
-    PVX = np.array(
-        [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
-    setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
+    if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
+        # test error rate:
+        sampler = theano.function([parameters] + model['inputs'], model['outputs'])
+        PVX = np.array(
+            [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
+        setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
 
     sql_session.commit()  # this updates all set information within sqlite database
 
@@ -370,6 +334,58 @@ while True:
         dm.InvertibleModel.INVERTIBLE_MODELS = []
         tm.Model.all_models = []
 
+        # baselinedet
+        # ===========
+
+        with log_exceptions("baselinedet"):
+            # this is extremely useful to tell everything the default sizes
+            input = tm.as_tensor_variable(X[0], name="X")
+
+            predictor = dm.Mlp(
+                input=input,
+                output_size=Z.shape[1],
+                output_transfer='identity',
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
+            )
+            target_distribution = pm.DiagGaussianNoise(predictor)
+            model = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+
+            loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
+
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("baselinedet", model, loss, flat, type="ml")
+
+
+        # baselinedet plus
+        # ================
+
+        with log_exceptions("baselinedetplus"):
+            # this is extremely useful to tell everything the default sizes
+            input = tm.as_tensor_variable(X[0], name="X")
+
+            predictor = dm.Mlp(
+                input=input,
+                output_size=Z.shape[1],
+                output_transfer='identity',
+                hidden_sizes=[(hyper.units_per_layer+ hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
+            )
+            target_distribution = pm.DiagGaussianNoise(predictor)
+            model = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+
+            loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
+
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("baselinedetplus", model, loss, flat, type="ml")
 
         # baseline
         # ========
@@ -382,8 +398,38 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
+            )
+            target_distribution = pm.DiagGaussianNoise(predictor)
+            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+
+            _total_size = tm.total_size(targets['to_be_randomized'])
+            params = pm.DiagGauss(output_size=_total_size)
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
+            loss = tm.loss_variational(model)
+
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
+            all_params += model['parameters']
+            flat = tm.prox_flatten(tm.prox_center(all_params))
+            optimize("baseline", model, loss, flat)
+
+        # baseline plus
+        # =============
+
+        with log_exceptions("baselineplus"):
+            # this is extremely useful to tell everything the default sizes
+            input = tm.as_tensor_variable(X[0], name="X")
+
+            predictor = dm.Mlp(
+                input=input,
+                output_size=Z.shape[1],
+                output_transfer='identity',
+                hidden_sizes=[(hyper.units_per_layer + hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,  # TODO this formula does not work for hyper.n_layers >= 2, too many parameters
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
@@ -398,8 +444,8 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baseline", model, loss, flat)
-            sql_session.commit()  # this updates all set information within sqlite database, but also deletes all respective hyperparameter information
+            optimize("baselineplus", model, loss, flat)
+
 
         # planarflow
         # ==========
@@ -411,8 +457,8 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer]*1,
-                hidden_transfers=["rectifier"]*1
+                hidden_sizes=[hyper.units_per_layer]*hyper.n_layers,
+                hidden_transfers=["rectifier"]*hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
@@ -447,8 +493,8 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized") # rename inputs is crucial!!
@@ -483,8 +529,8 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
@@ -505,7 +551,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflowml", model, loss, flat, maximum_likelihood=True)
+            optimize("planarflowml", model, loss, flat, type="ml_exp_average")
 
 
         # radialflow
@@ -518,15 +564,15 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             _total_size = tm.total_size(targets['to_be_randomized'])
             params_base = pm.DiagGauss(output_size=_total_size)
-            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows)]
+            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows*2)] # *2 as radial flow needs only half of the parameters
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
             for transform in normflows:
@@ -555,13 +601,13 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             target_normflow = tm.Merge(dm.PlanarTransform(),
                                        inputs="to_be_randomized")  # rename inputs is crucial!!
-            for _ in range(hyper.n_normflows - 1):
+            for _ in range(hyper.n_normflows*2 - 1): # *2 as radial flow needs only half of the parameters
                 target_normflow = tm.Merge(dm.RadialTransform(target_normflow), target_normflow)
             # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
 
@@ -593,14 +639,14 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
-            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
+            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows*2)]  # *2 as radial flow needs only half of the parameters
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
             for transform in normflows:
@@ -615,7 +661,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflowml", model, loss, flat, maximum_likelihood=True)
+            optimize("radialflowml", model, loss, flat, type="ml_exp_average")
 
 
         # Mixture
@@ -628,8 +674,8 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
@@ -661,8 +707,8 @@ while True:
                 input=input,
                 output_size=Z.shape[1],
                 output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * 1,
-                hidden_transfers=["rectifier"] * 1
+                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
+                hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
@@ -679,4 +725,4 @@ while True:
             all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("mixtureml", model, loss, flat, maximum_likelihood=True)
+            optimize("mixtureml", model, loss, flat, type="ml_exp_average")

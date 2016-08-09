@@ -14,7 +14,7 @@ from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.mylists import as_list, deflatten
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
-from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp
+from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp, AverageExp, lift
 from util import list_random_sources
 
 from base import Model, Merge, outputting_references
@@ -178,6 +178,8 @@ def numericalize(loss, parameters,
                  annealing_combiner=None, wrapper=lambda f:f,
                  initial_givens={}, adapt_init_params=lambda ps: ps,
                  batch_common_rng=True, batch_mapreduce=None, batch_precompile=True,
+                 exp_average_n=0,
+                 exp_ratio_estimator=None,
                  **theano_function_kwargs):
     """ Produces interface for standard numerical optimizer
 
@@ -212,16 +214,32 @@ def numericalize(loss, parameters,
     theano_function_kwargs : dict
         additional arguments passed to theano.function
 
+    exp_average_n : int
+        if an average in exponential space shall be done (i.e. in case of loglikelihood-loss on probability values)
+        use this, an averaging is applied to each sample independently
+
+    exp_ratio_estimator : str or None
+        method used for ratio estimator in case of `exp_average_n > 1`. Used for estimating the gradient.
+        'grouping', 'firstorder' or None
+
     Returns
     -------
-    DefaultDict over model
+    DefaultDict of num_loss, num_jacobian and num_hessian
     """
+
     # Parameter Preprocessing
     # -----------------------
     assert (not isinstance(parameters, Sequence)), "Currently only single theano expression for parameters is supported."
     if batch_mapreduce is None:
         # no precompile, if there is nothing to map upon
         batch_precompile = False
+    elif exp_average_n > 1:
+        # no warning, as batch_precompile=True is default value
+        # if batch_precompile:
+        #     warnings.warn("``average_exp=True`` requires ``batch_precompile=False``,"
+        #                   "as the latter is reset to ``True`` (was False)")
+        batch_precompile = False  # TODO add precompile = True version
+        batch_common_rng = False  # for precompile = True this is needed, otherwise averaging wouldn't make sense
     elif batch_common_rng:
         # precompile of there is something to map, and if same random numbers shall be used in every sample
         if not batch_precompile:
@@ -244,8 +262,9 @@ def numericalize(loss, parameters,
         "num_hessian": lambda key: theano.gradient.hessian(loss[key], parameters)
     }
 
-    def _numericalize(output):
+    def _numericalize(key_degree, key_loss):
         """ compiles function with signature f(num_params, *loss_inputs) """
+        output = derivatives[key_degree](key_loss)
         if batch_precompile:
             print "batch_precompile"
             # further the subgraph ``sub`` is computed
@@ -279,8 +298,46 @@ def numericalize(loss, parameters,
                 return batch_mapreduce(h, *loss_inputs)
             f.wrapped = fparam, foutput
 
-        else:  # this is to be erased as soon as pre_compilation is optimized
-            _f = theano_function([parameters] + loss['inputs'], output)
+        else:
+            if exp_average_n > 1:
+                if key_degree == "num_loss":
+                    _f = theano_function([parameters] + loss['inputs'], output)  # TODO the parameters part could be precompiled in principle
+                    _f = lift(_f, AverageExp(exp_average_n))
+                elif key_degree == "num_jacobian":
+                    Output = derivatives["num_loss"][key_loss]  # stammfunktion, therefore capital
+
+                    __f = theano.function([parameters] + loss['inputs'],
+                                         [Output, output])  # TODO the parameters part could be precompiled in principle
+
+                    def _f(num_params, *loss_inputs):
+                        def logP_logDerivative():
+                            for _ in xrange(exp_average_n):
+                                yield __f(num_params, *loss_inputs)
+                        log_Ps, log_derivatives = list(zip(*logP_logDerivative()))
+                        log_Ps, log_derivatives = np.asarray(log_Ps), np.asarray(log_derivatives)
+                        N = len(log_Ps)
+                        assert N == len(log_derivatives), "this should be the same"
+
+                        xs = np.exp(log_Ps)[:, None]
+                        ys = log_derivatives * xs
+                        if exp_ratio_estimator is None:
+                            # the biased estimator:
+                            return ys.sum(0) / xs.sum(0)
+                        elif exp_ratio_estimator == "grouping":
+                            # grouping formula for ratio estimator (applied to each gradient entry separately):
+                            return N * ys.sum(0) / xs.sum(0) - (N - 1) / N * log_derivatives.sum(0)  # this worked with certain initial random variables
+                        elif exp_ratio_estimator == "firstorder":
+                            # linear formula for ratio estimator: (does not seem to work, makes variance small again)
+                            xs_sum = xs.sum(0)
+                            xs_mean = xs_sum / N
+                            _cov = (xs - xs_mean) * (log_derivatives - log_derivatives.mean(0))
+                            return ys.sum(0)/xs_sum - _cov.mean(0)/xs_mean
+                else:
+                    raise KeyError("key %s is not supported with `n_average_exp > 1`" % key_degree)
+
+            else:
+                _f = theano_function([parameters] + loss['inputs'], output)
+
             if batch_mapreduce is not None:
                 def f(num_params, *loss_inputs):
                     def h(*inner_loss_inputs):
@@ -297,11 +354,11 @@ def numericalize(loss, parameters,
         try:
             if annealing_combiner:
                 return annealing_combiner(
-                    _numericalize(derivatives[key]("loss_data")),
+                    _numericalize(key, "loss_data"),
                     theano_function([parameters], derivatives[key]("loss_regularizer"))
                 )
             else:
-                return _numericalize(derivatives[key]("outputs"))
+                return _numericalize(key, "outputs")
 
         except (KeyError, TypeError, ValueError) as e:
             raise
@@ -321,7 +378,7 @@ def numericalize(loss, parameters,
     )  # TODO add information about keys in derivatives into DefaultDict
 
 
-
+'''
 # TODO test numericalizeExp !!!
 def numericalizeExp(loss, parameters,
                  annealing_combiner=None, wrapper=lambda f: f,
@@ -463,7 +520,7 @@ def numericalizeExp(loss, parameters,
 
     numericalized['num_parameters'] = adapt_init_params(parameters.eval(initial_givens))
     return numericalized
-
+'''
 
 # this is not itself a postmap, however essential ans specific helper for the numericalize postmap
 

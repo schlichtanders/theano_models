@@ -115,7 +115,7 @@ def _naval():
     D = np.loadtxt(os.path.join(__parent__, 'data', 'naval', 'data.txt')).astype('float32')
     X = D[:, :-2]
     Z = D[:, -2:-1]
-    return Z,X
+    return Z, X
 
 def naval(random_state):
     D = np.loadtxt(os.path.join(__parent__, 'data', 'naval', 'data.txt')).astype('float32')
