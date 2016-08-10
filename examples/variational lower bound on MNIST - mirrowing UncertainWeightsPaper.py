@@ -56,6 +56,7 @@ datafile = os.path.join(__parent__, 'data', 'mnist.pkl.gz')
 with gzip.open(datafile,'rb') as f:                                                                        
     train_set, val_set, test_set = cPickle.load(f)                                                       
 
+# X data is already normalized to (0,1)
 X, Z = train_set                                                                                               
 VX, VZ = val_set
 TX, TZ = test_set
@@ -74,7 +75,7 @@ TZ = one_hot(TZ, 10)
 # TX *= 2
 
 image_dims = 28, 28
-X, Z, VX, VZ, TX, TZ = [cast_array_to_local_type(i) for i in (X, Z, VX,VZ, TX, TZ)]
+X, Z, VX, VZ, TX, TZ = [cast_array_to_local_type(i) for i in (X, Z, VX, VZ, TX, TZ)]
 
 
 # Hyperparameters

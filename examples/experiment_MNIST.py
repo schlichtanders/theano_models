@@ -2,9 +2,12 @@
 from __future__ import division
 
 import contextlib
+import gzip
 import os, platform, sys, traceback
 from functools import partial
 from pprint import pformat, pprint
+
+import cPickle
 import numpy as np
 from theano.gof import MethodNotDefined
 
@@ -16,7 +19,10 @@ from schlichtanders.mycontextmanagers import ignored
 
 inf = float("inf")
 
-from schlichtanders.myfunctools import compose, meanmap, summap, compose_fmap, Average
+from breze.learn.data import one_hot
+from breze.learn.base import cast_array_to_local_type
+
+from schlichtanders.myfunctools import compose, meanmap, summap, compose_fmap, Average, lift
 from schlichtanders.mygenerators import eatN, chunk, chunk_list, every, takeN
 from schlichtanders.myobjects import NestedNamespace, Namespace
 
@@ -42,7 +48,7 @@ tm.inputting_references, tm.outputting_references
 
 EPS = 1e-4
 
-pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
+# pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
 __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":
@@ -51,18 +57,10 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-# defaults:
-foldername = "experiment"
-filename = "several"
-datasetname = "boston"
+filename = "mnist"
 
-#overwrite as far as given:
-if len(sys.argv) > 3:
-    foldername, filename, datasetname = sys.argv[1:4]
-elif len(sys.argv) > 2:
-    filename, datasetname = sys.argv[1:3]
-elif len(sys.argv) > 1:
-    datasetname = sys.argv[1]
+if len(sys.argv) > 1:
+    filename = sys.argv[1]
 
 
 class Track(object):
@@ -78,17 +76,22 @@ track = Track()
 # datasetname = "concrete"
 
 
-Z, X = getattr(data, "_" + datasetname)()
-# normalization is standard in Probabilistic Backpropagation Paper
-X_mean = X.mean(0)
-X_std = X.std(0)
-X = (X - X_mean) / X_std
-Z_mean = Z.mean(0)
-Z_std = Z.std(0)
-Z = (Z - Z_mean) / Z_std
+datafile = os.path.join(__parent__, 'data', 'mnist.pkl.gz')
 
-X, TX, Z, TZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 10% test used in paper
-X, VX, Z, VZ = cross_validation.train_test_split(X, Z, test_size=0.1) # 20% validation used in paper
+with gzip.open(datafile,'rb') as f:
+    train_set, val_set, test_set = cPickle.load(f)
+
+# X data is already normalized to (0,1)
+X, Z = train_set
+VX, VZ = val_set
+TX, TZ = test_set
+
+Z = one_hot(Z, 10)
+VZ = one_hot(VZ, 10)
+TZ = one_hot(TZ, 10)
+
+image_dims = 28, 28
+X, Z, VX, VZ, TX, TZ = [cast_array_to_local_type(i) for i in (X, Z, VX, VZ, TX, TZ)]
 
 # TODO the above randomly splits the dataset, which should be averaged out ideally... however with same initial parameters... that makes it difficult
 
@@ -99,7 +102,7 @@ def log_exceptions(title, *exceptions):
     try:
         yield
     except exceptions:
-        with open(os.path.join(__path__, foldername, '%s_errors.txt' % filename), "a") as myfile:
+        with open(os.path.join(__path__, '%s_errors.txt' % filename), "a") as myfile:
             error = """
 %s
 ------------
@@ -108,16 +111,7 @@ ORIGINAL ERROR: %s""" % (title, pformat(hyper.__dict__), traceback.format_exc())
             myfile.write(error)
 
 
-def RMSE(PX, Z):
-    return np.sqrt(((PX - Z) ** 2).mean())
-
-def nRMSE(PX, Z):
-    return RMSE(PX*Z_std + Z_mean, Z*Z_std + Z_mean)
-
-# # Hyperparameters
-with ignored(OSError):
-    os.mkdir(os.path.join(__path__, foldername))
-engine = create_engine('sqlite:///' + os.path.join(__path__, foldername, '%s.db' % filename))
+engine = create_engine('sqlite:///' + os.path.join(__path__, '%s.db' % filename))
 Base = declarative_base(bind=engine)
 
 
@@ -126,14 +120,13 @@ class RandomHyper(Base):
     id = Column(Integer, primary_key=True)
 
     # hyper parameters:
-    datasetname = Column(String)
     max_epochs_without_improvement = Column(Integer)
     logP_average_n = Column(Integer)
     errorrate_average_n = Column(Integer)
     exp_average_n = Column(Integer)
     units_per_layer = Column(Integer)
     n_layers = Column(Integer)
-    minus_log_s = Column(Integer)
+    minus_log_s1 = Column(Integer)
     batch_size = Column(Integer)
     
     n_normflows = Column(Integer)
@@ -165,19 +158,19 @@ class RandomHyper(Base):
                     setattr(self, k, copy(v))
             self.init_results()
             return
-        self.datasetname = datasetname
         # hyper parameters:
         self.max_epochs_without_improvement = 30
         # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
         # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
-        self.batch_size = random.choice([1, 10, 50, 100])
+        self.batch_size = 128
         self.logP_average_n = 1  # TODO random.choice([1,10])
         self.errorrate_average_n = 20
         self.exp_average_n = 20
         self.exp_ratio_estimator = random.choice([None, "grouping", "firstorder"])
-        self.n_layers = 1  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
-        self.units_per_layer = 50  # random.choice([50, 200]) - check whether baselineplus has an effect
-        self.minus_log_s = random.choice([1,2,3,4,5,6,7])
+        self.n_layers = 2  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
+        self.units_per_layer = 400  # random.choice([50, 200]) - check whether baselineplus has an effect
+        self.minus_log_s1 = random.choice([1, 2, 3, 4, 5, 6, 7])  #random.choice([0,1,2])
+        self.minus_log_s2 = random.choice([6,7,8])
         # the prior is learned together with the other models in analogy to the paper Probabilistic Backpropagation
         
         self.n_normflows = random.choice([1,2,3,4,8,20])  #32 is to much for theano... unfortunately
@@ -258,7 +251,7 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
             loss, parameters,
             adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
             # profile=True,
-            mode=mode, #'FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
+            mode=mode,  #'FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
             **numericalize_kwargs
         )
 
@@ -315,12 +308,11 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
     except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
         _optimize(mode='FAST_COMPILE')
 
-    if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
-        # test error rate:
-        sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
-        PVX = np.array(
-            [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
-        setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
+    predict = model.function(givens={parameters: getattr(hyper, prefix + "best_parameters")})
+    lift(predict, Average(hyper.errorrate_average_n))
+    PVX = np.apply_along_axis(predict, 1, VX)
+    val_error_rate = (PVX[:, :10].argmax(1) != VZ.argmax(1)).mean()
+    setattr(hyper, prefix + 'val_error_rate', val_error_rate)
 
     sql_session.commit()  # this updates all set information within sqlite database
 
@@ -357,18 +349,18 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             model = tm.Merge(target_distribution, predictor)
 
             loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
 
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+            #                                     track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
             optimize("baselinedet", model, loss, flat, type="ml")
@@ -384,18 +376,19 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[(hyper.units_per_layer+ hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,
+                output_transfer='softmax',
+                hidden_sizes=[1200] * hyper.n_layers,
+                # hidden_sizes=[(hyper.units_per_layer+ int(hyper.units_per_layer*(hyper.n_normflows*1.5)))] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             model = tm.Merge(target_distribution, predictor)
 
             loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
 
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
+            # all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+            #                                     track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
             optimize("baselinedetplus", model, loss, flat, type="ml")
@@ -410,16 +403,16 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             _total_size = tm.total_size(targets['to_be_randomized'])
             params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -428,7 +421,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baseline", model, loss, flat)
+            optimize("baseline", model, loss, flat, type='annealing')
 
         # baseline plus
         # =============
@@ -440,16 +433,17 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[(hyper.units_per_layer + hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,  # TODO this formula does not work for hyper.n_layers >= 2, too many parameters
+                output_transfer='softmax',
+                hidden_sizes=[1200] * hyper.n_layers,
+                # hidden_sizes=[(hyper.units_per_layer + int(hyper.units_per_layer*(hyper.n_normflows*1.5)))] * hyper.n_layers,  # TODO this formula does not work for hyper.n_layers >= 2, too many parameters
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             _total_size = tm.total_size(targets['to_be_randomized'])
             params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -457,7 +451,7 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baselineplus", model, loss, flat)
+            optimize("baselineplus", model, loss, type='annealing')
 
 
         # planarflow
@@ -469,11 +463,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer]*hyper.n_layers,
                 hidden_transfers=["rectifier"]*hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             _total_size = tm.total_size(targets['to_be_randomized'])
@@ -484,7 +478,7 @@ while True:
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2* hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -492,7 +486,7 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflow", model, loss, flat)
+            optimize("planarflow", model, loss, flat, type='annealing')
 
 
         # planarflow Deterministic
@@ -505,11 +499,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized") # rename inputs is crucial!!
             for _ in range(hyper.n_normflows - 1):
                 target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
@@ -521,7 +515,7 @@ while True:
             targets = tm.Merge(targets, target_normflow)
 
             params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -529,7 +523,7 @@ while True:
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflowdet", model, loss, flat)
+            optimize("planarflowdet", model, loss, flat, type='annealing')
 
 
         # planarflow Maximum Likelihood
@@ -541,11 +535,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
@@ -576,11 +570,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             _total_size = tm.total_size(targets['to_be_randomized'])
@@ -591,7 +585,7 @@ while True:
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -600,7 +594,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflow", model, loss, flat)
+            optimize("radialflow", model, loss, flat, type='annealing')
 
 
         # radialflow Deterministic
@@ -613,11 +607,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             target_normflow = tm.Merge(dm.PlanarTransform(),
                                        inputs="to_be_randomized")  # rename inputs is crucial!!
             for _ in range(hyper.n_normflows*2 - 1): # *2 as radial flow needs only half of the parameters
@@ -630,7 +624,7 @@ while True:
             targets = tm.Merge(targets, target_normflow)
 
             params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -639,7 +633,7 @@ while True:
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflowdet", model, loss, flat)
+            optimize("radialflowdet", model, loss, flat, type='annealing')
 
 
         # radialflow Maximum Likelihood
@@ -651,11 +645,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
@@ -686,11 +680,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             # the number of parameters comparing normflows and mixture of gaussians match perfectly (the only exception is
@@ -698,7 +692,7 @@ while True:
             _total_size = tm.total_size(targets['to_be_randomized'])
             mixture_comps = [pm.DiagGauss(output_size=_total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
             params = pm.Mixture(*mixture_comps)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
+            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
             model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
             loss = tm.loss_variational(model)
 
@@ -707,7 +701,7 @@ while True:
             all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("mixture", model, loss, flat)
+            optimize("mixture", model, loss, flat, type='annealing')
 
 
         # Mixture Maximum Likelihood
@@ -719,11 +713,11 @@ while True:
             predictor = dm.Mlp(
                 input=input,
                 output_size=Z.shape[1],
-                output_transfer='identity',
+                output_transfer='softmax',
                 hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
-            target_distribution = pm.DiagGaussianNoise(predictor)
+            target_distribution = pm.Categorical(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
             mixture_comps = [pm.DiagGauss(output_size=_total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
