@@ -58,7 +58,6 @@ __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
 filename = "mnist"
-
 if len(sys.argv) > 1:
     filename = sys.argv[1]
 
@@ -159,7 +158,7 @@ class RandomHyper(Base):
             self.init_results()
             return
         # hyper parameters:
-        self.max_epochs_without_improvement = 30
+        self.max_epochs_without_improvement = 5  # 30 epochs need extremely long here
         # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
         # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
         self.batch_size = 128

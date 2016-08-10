@@ -333,7 +333,8 @@ Reparam = tm.as_proxmodel('parameters')(tm.prox_reparameterize)
 Flat = tm.as_proxmodel("to_be_randomized")(tm.prox_flatten)
 
 while True:
-    for _i in range(3):  # repeat, taking slightly different starting parameters each time
+    # for _i in range(3):  # repeat, taking slightly different starting parameters each time
+    for _i in range(2):  # we can repeat things later on intensively, on the favourite solutions
         if _i == 0:
             hyper = RandomHyper()
             hyper_dict = copy(hyper.__dict__)
