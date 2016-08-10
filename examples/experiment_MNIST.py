@@ -282,7 +282,7 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
         # train_losses = getattr(hyper, prefix + "train_loss")
         for info in every(n_batches, opt):
             current_epoch = info['n_iter'] // n_batches
-            # print current_epoch,
+            print current_epoch,
             if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
                 break
             # collect and visualize validation loss for choosing the best model
@@ -301,7 +301,7 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
             # visualize training loss for comparison:
             # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
             # train_losses.append(training_loss)
-        print current_epoch
+        # print current_epoch
 
     try:
         _optimize()

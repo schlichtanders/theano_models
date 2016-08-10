@@ -144,11 +144,7 @@ class RandomHyper(Base):
     opt_decay = Column(Float)
     opt_step_rate = Column(Float)
 
-    for _prefix in ['baselinedet_', 'baselinedetplus_',
-                    'baseline_', 'baselineplus_',
-                    'mixture_',
-                    'planarflow_', 'planarflowdet_',
-                    'radialflow_', 'radialflowdet_']:
+    for _prefix in ['mixtureml_', 'planarflowml_', 'radialflowml_']:
         exec("""
 {0}best_val_loss = Column(Float)
 {0}best_parameters = Column(PickleType, nullable=True)
@@ -200,11 +196,7 @@ class RandomHyper(Base):
     
     def init_results(self):
         # extra for being able to reset results for loaded hyperparameters
-        for prefix in ['baselinedet_', 'baselinedetplus_',
-                       'baseline_', 'baselineplus_',
-                       'mixture_',
-                       'planarflow_', 'planarflowdet_',
-                       'radialflow_', 'radialflowdet_']:
+        for prefix in ['mixtureml_','planarflowml_', 'radialflowml_']:
             setattr(self, prefix + "best_parameters", None)
             setattr(self, prefix + "best_val_loss", inf)
             setattr(self, prefix + "train_loss", [])
@@ -347,63 +339,9 @@ while True:
         dm.InvertibleModel.INVERTIBLE_MODELS = []
         tm.Model.all_models = []
 
-        # baselinedet
-        # ===========
-
-        with log_exceptions("baselinedet"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
-                hidden_transfers=["rectifier"] * hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            model = tm.Merge(target_distribution, predictor)
-
-            loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baselinedet", model, loss, flat, type="ml")
-
-
-        # baselinedet plus
-        # ================
-
-        with log_exceptions("baselinedetplus"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[(hyper.units_per_layer+ hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,
-                hidden_transfers=["rectifier"] * hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            model = tm.Merge(target_distribution, predictor)
-
-            loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baselinedetplus", model, loss, flat, type="ml")
-
-        # baseline
-        # ========
-
-        with log_exceptions("baseline"):
+        # planarflow Maximum Likelihood
+        # =============================
+        with log_exceptions("planarflowml"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -417,124 +355,28 @@ while True:
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baseline", model, loss, flat)
-
-        # baseline plus
-        # =============
-
-        with log_exceptions("baselineplus"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[(hyper.units_per_layer + hyper.units_per_layer*(hyper.n_normflows*2))] * hyper.n_layers,  # TODO this formula does not work for hyper.n_layers >= 2, too many parameters
-                hidden_transfers=["rectifier"] * hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
-
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("baselineplus", model, loss, flat)
-
-
-        # planarflow
-        # ==========
-        with log_exceptions("planarflow"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer]*hyper.n_layers,
-                hidden_transfers=["rectifier"]*hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
-
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            params_base = pm.DiagGauss(output_size=_total_size)
-            normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]
+            params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
+            normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]  # no LocScaleTransform
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2* hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
+            targets['to_be_randomized'] = params
+            model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
 
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
+            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
+                                                track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflow", model, loss, flat)
+            optimize("planarflowml", model, loss, flat, type="ml_exp_average")
 
 
-        # planarflow Deterministic
-        # ========================
-
-        with log_exceptions("planarflowdet"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
-                hidden_transfers=["rectifier"] * hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized") # rename inputs is crucial!!
-            for _ in range(hyper.n_normflows - 1):
-                target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
-            # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
-
-            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            targets['to_be_randomized'] = target_normflow
-            targets = tm.Merge(targets, target_normflow)
-
-            params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("planarflowdet", model, loss, flat)
-
-
-        # radialflow
-        # ==========
-        with log_exceptions("radialflow"):
+        # radialflow Maximum Likelihood
+        # =============================
+        with log_exceptions("radialflowml"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -548,68 +390,28 @@ while True:
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            params_base = pm.DiagGauss(output_size=_total_size)
-            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows*2)] # *2 as radial flow needs only half of the parameters
+            params_base = pm.DiagGauss(output_size=tm.total_size(targets['to_be_randomized']))
+            normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows*2)]  # *2 as radial flow needs only half of the parameters
             # LocScaleTransform for better working with PlanarTransforms
             params = params_base
             for transform in normflows:
                 params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
 
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
+            targets['to_be_randomized'] = params
+            model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
 
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
                                                 track.squareplus_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflow", model, loss, flat)
+            optimize("radialflowml", model, loss, flat, type="ml_exp_average")
 
 
-        # radialflow Deterministic
-        # ========================
-
-        with log_exceptions("radialflowdet"):
-            # this is extremely useful to tell everything the default sizes
-            input = tm.as_tensor_variable(X[0], name="X")
-
-            predictor = dm.Mlp(
-                input=input,
-                output_size=Z.shape[1],
-                output_transfer='identity',
-                hidden_sizes=[hyper.units_per_layer] * hyper.n_layers,
-                hidden_transfers=["rectifier"] * hyper.n_layers
-            )
-            target_distribution = pm.DiagGaussianNoise(predictor)
-            target_normflow = tm.Merge(dm.PlanarTransform(),
-                                       inputs="to_be_randomized")  # rename inputs is crucial!!
-            for _ in range(hyper.n_normflows*2 - 1): # *2 as radial flow needs only half of the parameters
-                target_normflow = tm.Merge(dm.RadialTransform(target_normflow), target_normflow)
-            # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
-
-            targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
-            _total_size = tm.total_size(targets['to_be_randomized'])
-            targets['to_be_randomized'] = target_normflow
-            targets = tm.Merge(targets, target_normflow)
-
-            params = pm.DiagGauss(output_size=_total_size)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
-
-            # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
-            all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
-                                                track.squareplus_inv)
-            all_params += model['parameters']
-            flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("radialflowdet", model, loss, flat)
-
-
-        # Mixture
-        # =======
-        with log_exceptions("mixture"):
+        # Mixture Maximum Likelihood
+        # ==========================
+        with log_exceptions("mixtureml"):
             # this is extremely useful to tell everything the default sizes
             input = tm.as_tensor_variable(X[0], name="X")
 
@@ -623,18 +425,16 @@ while True:
             target_distribution = pm.DiagGaussianNoise(predictor)
             targets = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
 
-            # the number of parameters comparing normflows and mixture of gaussians match perfectly (the only exception is
-            # that we spend an additional parameter when modelling n psumto1 with n parameters instead of (n-1) within softmax
-            _total_size = tm.total_size(targets['to_be_randomized'])
             mixture_comps = [pm.DiagGauss(output_size=_total_size) for _ in range(hyper.n_normflows + 1)]  # +1 for base_model
             params = pm.Mixture(*mixture_comps)
-            prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s)))
-            model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
-            loss = tm.loss_variational(model)
+
+            targets['to_be_randomized'] = params
+            model = tm.Merge(targets, params)
+            loss = tm.loss_probabilistic(model)
 
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
             all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
             all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
             all_params += model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
-            optimize("mixture", model, loss, flat)
+            optimize("mixtureml", model, loss, flat, type="ml_exp_average")
