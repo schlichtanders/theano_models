@@ -42,7 +42,7 @@ tm.inputting_references, tm.outputting_references
 
 EPS = 1e-4
 
-# pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
+pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
 __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":
@@ -185,16 +185,15 @@ class RandomHyper(Base):
         self.opt_identifier = random.choice(["adadelta", "adam", "rmsprop"])
         if self.opt_identifier == "adadelta":
             self.opt_momentum = random.choice([np.random.uniform(0, 0.01), np.random.uniform(0.9, 1)])
-            self.opt_offset = random.choice([5e-5, 1e-8])
-            self.opt_step_rate = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-5])
+            # self.opt_offset = random.choice([5e-5, 1e-8])
         elif self.opt_identifier == "adam":
             self.opt_momentum = random.choice([np.random.uniform(0, 0.01), np.random.uniform(0.8, 0.93)])
-            self.opt_offset = 10 ** -np.random.uniform(3, 4)
-            self.opt_step_rate = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-5])
+            # self.opt_offset = 10 ** -np.random.uniform(3, 4)
         elif self.opt_identifier == "rmsprop":
             self.opt_momentum = random.choice([np.random.uniform(0.002, 0.008), np.random.uniform(0.9, 1)])
-            self.opt_offset = np.random.uniform(0, 0.000045)
-            self.opt_step_rate = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-5])
+            # self.opt_offset = np.random.uniform(0, 0.000045)
+        # self.opt_step_rate = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6])
+        self.opt_step_rate = random.choice([1e-3, 1e-4, 1e-5, 1e-6])
         self.opt_decay = np.random.uniform(0.78, 1)
         
         self.init_results()
@@ -268,7 +267,7 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
             step_rate=hyper.opt_step_rate,
             momentum=hyper.opt_momentum,
             decay=hyper.opt_decay,
-            offset=hyper.opt_offset,
+            # offset=hyper.opt_offset,
             args=climin_args,
             **tm.climin_kwargs(optimizer_kwargs)
         )
