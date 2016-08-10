@@ -361,7 +361,7 @@ while True:
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
             # all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
             #                                     track.squareplus_inv)
-            all_params += model['parameters']
+            all_params = model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
             optimize("baselinedet", model, loss, flat, type="ml")
 
@@ -389,7 +389,7 @@ while True:
             # all_params = tm.prox_reparameterize(model['parameters_positive'], tm.softplus, tm.softplus_inv)
             # all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus,
             #                                     track.squareplus_inv)
-            all_params += model['parameters']
+            all_params = model['parameters']
             flat = tm.prox_flatten(tm.prox_center(all_params))
             optimize("baselinedetplus", model, loss, flat, type="ml")
 
