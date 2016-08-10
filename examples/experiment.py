@@ -6,6 +6,8 @@ import os, platform, sys, traceback
 from functools import partial
 from pprint import pformat, pprint
 import numpy as np
+from theano.gof import MethodNotDefined
+
 from climin.util import optimizer
 from itertools import repeat, cycle, islice, izip
 import random
@@ -40,7 +42,7 @@ tm.inputting_references, tm.outputting_references
 
 EPS = 1e-4
 
-pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
+# pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
 
 __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":
@@ -252,60 +254,68 @@ def optimize(prefix, model, loss, parameters, type='annealing'):
     else:
         raise ValueError("Unkown type %s" % type)
 
-    optimizer_kwargs = tm.numericalize(
-        loss, parameters,
-        adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
-        # profile=True,
-        mode='FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
-        **numericalize_kwargs
-    )
+    def _optimize(mode='FAST_RUN'):
+        optimizer_kwargs = tm.numericalize(
+            loss, parameters,
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
+            # profile=True,
+            mode=mode, #'FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
+            **numericalize_kwargs
+        )
 
-    opt = optimizer(
-        identifier=hyper.opt_identifier,
-        step_rate=hyper.opt_step_rate,
-        momentum=hyper.opt_momentum,
-        decay=hyper.opt_decay,
-        offset=hyper.opt_offset,
-        args=climin_args,
-        **tm.climin_kwargs(optimizer_kwargs)
-    )
+        opt = optimizer(
+            identifier=hyper.opt_identifier,
+            step_rate=hyper.opt_step_rate,
+            momentum=hyper.opt_momentum,
+            decay=hyper.opt_decay,
+            offset=hyper.opt_offset,
+            args=climin_args,
+            **tm.climin_kwargs(optimizer_kwargs)
+        )
 
-    val_kwargs = {}
-    if type == "annealing":
-        val_kwargs['no_annealing'] = True
-    # start values:
-    setattr(hyper, prefix + "init_params", copy(opt.wrt))
-    setattr(hyper, prefix + "best_val_loss",
-            optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-            )
-            # TODO include this:
-            # if hyper.logP_average_n <= 1 or type.startswith("ml") else  # maximum_likelihood already averages over each single data point
-            # Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
+        val_kwargs = {}
+        if type == "annealing":
+            val_kwargs['no_annealing'] = True
+        # start values:
+        setattr(hyper, prefix + "init_params", copy(opt.wrt))
+        setattr(hyper, prefix + "best_val_loss",
+                optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+                )
+                # TODO include this:
+                # if hyper.logP_average_n <= 1 or type.startswith("ml") else  # maximum_likelihood already averages over each single data point
+                # Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
 
-    # val_losses = getattr(hyper, prefix + "val_loss")
-    # train_losses = getattr(hyper, prefix + "train_loss")
-    for info in every(n_batches, opt):
-        current_epoch = info['n_iter']//n_batches
-        print current_epoch,
-        if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
-            break
-        # collect and visualize validation loss for choosing the best model
-        val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-        # TODO include this
-        # if hyper.logP_average_n <= 1 or type.startswith("ml"):  # maximum_likelihood already averages over each single data point
-        #     val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-        # else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
-        #     val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
-        if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
-            setattr(hyper, prefix + "best_epoch", current_epoch)
-            setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
-            setattr(hyper, prefix + "best_val_loss", val_loss)
-        # val_losses.append(val_loss)
+        setattr(hyper, prefix + "val_loss", [])
+        val_losses = getattr(hyper, prefix + "val_loss")
+        # train_losses = getattr(hyper, prefix + "train_loss")
+        for info in every(n_batches, opt):
+            current_epoch = info['n_iter']//n_batches
+            # print current_epoch,
+            if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
+                break
+            # collect and visualize validation loss for choosing the best model
+            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            # TODO include this
+            # if hyper.logP_average_n <= 1 or type.startswith("ml"):  # maximum_likelihood already averages over each single data point
+            #     val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            # else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
+            #     val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
+            if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
+                setattr(hyper, prefix + "best_epoch", current_epoch)
+                setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
+                setattr(hyper, prefix + "best_val_loss", val_loss)
+            val_losses.append(val_loss)
 
-        # visualize training loss for comparison:
-        # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-        # train_losses.append(training_loss)
-    print
+            # visualize training loss for comparison:
+            # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
+            # train_losses.append(training_loss)
+        print current_epoch
+
+    try:
+        _optimize()
+    except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
+        _optimize(mode='FAST_COMPILE')
+
     if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
         # test error rate:
         sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
@@ -353,7 +363,7 @@ while True:
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            model = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+            model = tm.Merge(target_distribution, predictor)
 
             loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
 
@@ -380,7 +390,7 @@ while True:
                 hidden_transfers=["rectifier"] * hyper.n_layers
             )
             target_distribution = pm.DiagGaussianNoise(predictor)
-            model = tm.Merge(target_distribution, predictor, Flat(predictor['parameters']))
+            model = tm.Merge(target_distribution, predictor)
 
             loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
 
