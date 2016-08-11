@@ -155,10 +155,12 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
         logP_average_n = Column(Integer)
         errorrate_average_n = Column(Integer)
         exp_average_n = Column(Integer)
+        exp_ratio_estimator = Column(str, nullable=True)
         units_per_layer = Column(Integer)
         units_per_layer_plus = Column(Integer)
         n_layers = Column(Integer)
         minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
         batch_size = Column(Integer)
 
         n_normflows = Column(Integer)
