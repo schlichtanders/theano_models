@@ -144,7 +144,9 @@ else:
         print "ROUND %i" % i
         print "=========================================="
 
-        for params in good_parameters:
+        for ip, params in enumerate(good_parameters):
+            print "parameterset %i" % ip
+            print "----------------------------------------------"
             hyper = Hyper(datasetname)
             hyper_init(hyper)
             hyper_init_dict(hyper, params)

@@ -48,7 +48,7 @@ setup(
         "schlichtanders>=0.1.0",
         "numpy>=1.10.2",
         "scipy>=0.13.3",
-        "theano>=0.9.0.dev0",
+        "theano>=0.7.0",
         "climin>=pre-0.1",
         "six>=1.10.0",
     ],
