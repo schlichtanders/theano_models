@@ -12,6 +12,7 @@ from functools import wraps
 from copy import deepcopy, copy
 from time import time
 import warnings
+import h5py
 
 import numpy
 import numpy as np
@@ -469,11 +470,21 @@ import theano
 from theano.tensor.shared_randomstreams import RandomStreams
 
 
+def create_hdf5_pool(path, size_each, random_methods):
+    rng = np.random.RandomState()
+    h = h5py.File(path, "w")
+    for method in random_methods:
+        pool = getattr(rng, method)(size=size_each)
+        h.create_dataset(method, data=pool)
+    h.close()
+
+
 class PooledRandomStreams(object):
 
-    def __init__(self, pool_size=int(1e8), num_rng=np.random.RandomState(), sym_rng=RandomStreams()):
+    def __init__(self, pool_size=int(1e8), hdf5_pool=None, num_rng=np.random.RandomState(), sym_rng=RandomStreams()):
+
         self.pool_size = pool_size
-        self.pools = {}
+        self.pools = {} if hdf5_pool is None else hdf5_pool
         self.num_rng = num_rng
         self.sym_rng = sym_rng
 
@@ -482,7 +493,8 @@ class PooledRandomStreams(object):
             self.pools[key] = as_tensor_variable(getattr(self.num_rng, key)(size=self.pool_size))
 
         size = T.prod(shape)
-        start_i = self.sym_rng.random_integers(size=tuple(), low=0, high=self.pool_size - size - 1)  # -1 as also high is inclusive
+        pool_size = self.pools[key].size  # so that this also works together with hdf5_pool
+        start_i = self.sym_rng.random_integers(size=tuple(), low=0, high=pool_size - size - 1)  # -1 as also high is inclusive
         return T.reshape(self.pools[key][start_i:start_i + size], shape)
 
     # def binomial(self, size=None, n=1, p=0.5, ndim=None, dtype='int64', prob=None):
@@ -804,7 +816,8 @@ def graphopt_merge_add_mul(inputs, outputs):
     everything_before_fusion = theano.compile.optdb.query(mode._optimizer, position_cutoff=49)
     # opt_merge = theano.gof.MergeOptimizer()  # theano.compile.optdb['merge1']
     # opt_canonicalize = theano.compile.optdb['canonicalize'].query(mode._optimizer)
-    opt_add_mul_fusion = theano.tensor.opt.FusionOptimizer(theano.tensor.opt.local_add_mul_fusion)
+    if mode != "FAST_COMPILE":
+        opt_add_mul_fusion = theano.tensor.opt.FusionOptimizer(theano.tensor.opt.local_add_mul_fusion)
 
     # stabilize = theano.compile.optdb['stabilize'].query(mode._optimizer)
     # print theano.compile.optdb['elemwise_fusion'].__position__
@@ -815,7 +828,8 @@ def graphopt_merge_add_mul(inputs, outputs):
     # opt_canonicalize(fg)
     # opt_merge(fg)
     everything_before_fusion(fg)
-    opt_add_mul_fusion(fg)
+    if mode != "FAST_COMPILE":
+        opt_add_mul_fusion(fg)
     # no further elemwise opt fusion
     return fg.inputs, fg.outputs
 
