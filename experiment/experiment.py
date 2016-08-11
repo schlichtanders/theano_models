@@ -136,6 +136,7 @@ else:
             # this should not be updated in hyper
             # (double quote as quoting=csv.QUOTE_NONNUMERIC was used to create this csv)
             del row['"datasetname"']
+            # TODO if the first runs through, delete also n_normflows, as we want to have all of them
             good_parameters.append(
                 {literal_eval(k): literal_eval(v) for k, v in row.iteritems()}
             )  # evaluate everything, this version also distinguishes ints/floats
@@ -148,6 +149,7 @@ else:
             print "parameterset %i" % ip
             print "----------------------------------------------"
             hyper = Hyper(datasetname)
+            hyper_init_random(hyper)
             hyper_init(hyper)
             hyper_init_dict(hyper, params)
             if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
