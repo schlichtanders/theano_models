@@ -105,7 +105,7 @@ def optimize_all(hyper):
                     hyper, example_input, example_outpt, output_transfer)
                 optimize(  # updates hyper inplace with results
                     prefix=model_name, data=data, hyper=hyper, model=model, loss=loss,
-                    parameters=flat, error_func=error_func, type=optimization_type
+                    parameters=flat, error_func=error_func, optimization_type=optimization_type
                 )
                 sql_session.commit()
 

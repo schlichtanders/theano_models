@@ -270,7 +270,7 @@ def hyper_init_mnist(hyper):
 # OPTIMIZATION
 # ============
 
-def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='annealing'):
+def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimization_type):
     X, Z, VX, VZ = data[:4] # there might be TX, TZ, but we are not interested in them
     print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
@@ -280,17 +280,17 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
     n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
     climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
-    if type == "ml": # maximum likelihood
+    if optimization_type == "ml": # maximum likelihood
         numericalize_kwargs = dict(
             batch_mapreduce=meanmap,
         )
-    elif type == "ml_exp_average":
+    elif optimization_type == "ml_exp_average":
         numericalize_kwargs = dict(
             batch_mapreduce=meanmap,
             exp_average_n=hyper.exp_average_n,
             exp_ratio_estimator=hyper.exp_ratio_estimator,
         )
-    elif type == "annealing":
+    elif optimization_type == "annealing":
         def weights_regularizer_1epoch():
             for i in range(1, n_batches + 1):
                 yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
@@ -302,7 +302,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
             ),
         )
     else:
-        raise ValueError("Unkown type %s" % type)
+        raise ValueError("Unkown type %s" % optimization_type)
 
     def _optimize(mode='FAST_RUN'):
         theano.config.mode = mode
@@ -325,16 +325,12 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
         )
 
         val_kwargs = {}
-        if type == "annealing":
+        if optimization_type == "annealing":
             val_kwargs['no_annealing'] = True
         # start values:
         setattr(hyper, prefix + "init_params", copy(opt.wrt))
-        setattr(hyper, prefix + "best_val_loss",
-                optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-                )
-                # TODO include this:
-                # if hyper.logP_average_n <= 1 or type.startswith("ml") else  # maximum_likelihood already averages over each single data point
-                # Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs))
+        setattr(hyper, prefix + "best_val_loss", optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs))
+        # for the start no averaging is needed, as this is not crucial at all
 
         setattr(hyper, prefix + "val_loss", [])
         val_losses = getattr(hyper, prefix + "val_loss")
@@ -345,12 +341,11 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
             if current_epoch - getattr(hyper, prefix + "best_epoch") > hyper.max_epochs_without_improvement:
                 break
             # collect and visualize validation loss for choosing the best model
-            val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-            # TODO include this
-            # if hyper.logP_average_n <= 1 or type.startswith("ml"):  # maximum_likelihood already averages over each single data point
-            #     val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-            # else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
-            #     val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
+            # val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            if hyper.logP_average_n <= 1 or optimization_type.startswith("ml"):  # maximum_likelihood already averages over each single data point
+                val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
+                val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
             if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
                 setattr(hyper, prefix + "best_epoch", current_epoch)
                 setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
