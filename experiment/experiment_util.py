@@ -155,7 +155,7 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
         logP_average_n = Column(Integer)
         errorrate_average_n = Column(Integer)
         exp_average_n = Column(Integer)
-        exp_ratio_estimator = Column(str, nullable=True)
+        exp_ratio_estimator = Column(String, nullable=True)
         units_per_layer = Column(Integer)
         units_per_layer_plus = Column(Integer)
         n_layers = Column(Integer)
