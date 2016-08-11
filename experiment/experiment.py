@@ -55,7 +55,7 @@ csvpath = os.path.join(__path__, 'good_parameters.csv')
 
 
 tm.inputting_references.update(['to_be_randomized'])
-pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(5e8)), RandomStreams())
+pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
