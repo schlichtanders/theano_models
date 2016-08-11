@@ -382,6 +382,6 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
         sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
         PVX = np.array(
             [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
-        setattr(hyper, prefix + 'val_error_rate', nRMSE(PVX, VZ))
+        setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
 
     return hyper
