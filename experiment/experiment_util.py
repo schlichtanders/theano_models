@@ -187,6 +187,9 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
             datasetname : str
             """
             self.datasetname = datasetname
+            self.logP_average_n = 10  # TODO random.choice([1,10])
+            self.errorrate_average_n = 20
+            self.exp_average_n = 20
             self.init_results()
 
         def init_results(self):
@@ -245,9 +248,6 @@ def hyper_init_several(hyper):
     hyper.max_epochs_without_improvement = 30
     # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
     # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
-    hyper.logP_average_n = 1  # TODO random.choice([1,10])
-    hyper.errorrate_average_n = 20
-    hyper.exp_average_n = 20
     hyper.n_layers = 1  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
     hyper.units_per_layer = 50  # random.choice([50, 200]) - check whether baselineplus has an effect
     # the following formula is sound for n_layers=1
@@ -257,19 +257,14 @@ def hyper_init_several(hyper):
         # n_normflows not yet set
         warnings.warn("don't forget to set hyper.units_per_layer_plus")
 
-def hyper_init_mnist(self):
-    self.max_epochs_without_improvement = 5  # 30 epochs need extremely long here
+def hyper_init_mnist(hyper):
+    hyper.max_epochs_without_improvement = 5  # 30 epochs need extremely long here
     # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
     # there are still erros with batch_size=2 for some weird reasons... don't know. I hope this is not crucial.
-    self.batch_size = 128
-    self.logP_average_n = 1  # TODO random.choice([1,10])
-    self.errorrate_average_n = 20
-    self.exp_average_n = 20
-    self.exp_ratio_estimator = random.choice([None, "grouping", "firstorder"])
-    self.n_layers = 2  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
-    self.units_per_layer = 400  # random.choice([50, 200]) - check whether baselineplus has an effect
-    self.units_per_layer_plus = 1200
-    self.n_normflows = random.choice([1, 2, 3, 4, 8, 20])  # 32 is to much for theano... unfortunately
+    hyper.batch_size = 128
+    hyper.n_layers = 2  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
+    hyper.units_per_layer = 400  # random.choice([50, 200]) - check whether baselineplus has an effect
+    hyper.units_per_layer_plus = 1200
 
 
 # OPTIMIZATION
@@ -315,7 +310,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
             loss, parameters,
             adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
             # profile=True,
-            mode=mode, #'FAST_COMPILE' if hyper.n_normflows > 10 else 'FAST_RUN', # error that theano cannot handle ufuncs with more than 32 arguments
+            mode=mode,
             **numericalize_kwargs
         )
 
@@ -374,16 +369,20 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, type='ann
 
     if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
 
-        predict = model.function(givens={parameters: getattr(hyper, prefix + "best_parameters")}, allow_input_downcast=True)
-        predict = lift(predict, Average(hyper.errorrate_average_n))
-        PVX = np.apply_along_axis(predict, 1, VX)
-        val_error_rate = (PVX[:, :10].argmax(1) != VZ.argmax(1)).mean()
-        setattr(hyper, prefix + 'val_error_rate', val_error_rate)
+        # there problems with down_casting 64bit to 32bit float vectors... I cannot see where the point is, however
+        # the version below works indeed
+        # predict = model.function(givens={parameters: getattr(hyper, prefix + "best_parameters")}, allow_input_downcast=True)
+        # predict = lift(predict, Average(hyper.errorrate_average_n))
+        # PVX = np.apply_along_axis(predict, 1, VX)
+        # setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
 
         # test error rate:
+        best_params = getattr(hyper, prefix + "best_parameters")
+        fmap_avg = Average(hyper.errorrate_average_n)
+        def avg_predict(x):
+            return fmap_avg(sampler, best_params, x)
         sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
-        PVX = np.array(
-            [Average(hyper.errorrate_average_n)(sampler, getattr(hyper, prefix + "best_parameters"), x) for x in VX])
+        PVX = np.apply_along_axis(avg_predict, 1, VX)
         setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
 
     return hyper

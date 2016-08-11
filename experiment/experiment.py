@@ -3,6 +3,7 @@ from __future__ import division
 
 import operator as op
 import os, platform, sys
+import random
 from ast import literal_eval
 from pprint import pformat, pprint
 
@@ -68,7 +69,8 @@ model_names = { # sorted by optimization type
     "ml": ['baselinedet', 'baselinedetplus'],
     "annealing": ['baseline', 'baselineplus', 'mixture',
                   'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet'],
-    "ml_exp_average": ['mixtureml', 'planarflowml', 'radialflowml'],
+    # first trials do not seem to be successfull, furthermore this needs a lot of time, maybe later on
+    # "ml_exp_average": ['mixtureml', 'planarflowml', 'radialflowml'],
 }
 
 # Hyperparameters
@@ -111,8 +113,8 @@ sample_new = False
 # randomly sample new hyperparameters
 if sample_new:
     while True:
-        for i in range(3):  # repeat, taking slightly different starting parameters each time
-            if i == 0:
+        for ir in range(3):  # repeat, taking slightly different starting parameters each time
+            if ir == 0:
                 hyper = Hyper(datasetname)
                 hyper_init_random(hyper)
                 hyper_init(hyper)
@@ -140,20 +142,24 @@ else:
             good_parameters.append(
                 {literal_eval(k): literal_eval(v) for k, v in row.iteritems()}
             )  # evaluate everything, this version also distinguishes ints/floats
+    random.shuffle(good_parameters)  # permutes inplace
 
-    for i in itertools.count():  # repeat the set
-        print "ROUND %i" % i
+    for ir in itertools.count():  # repeat the set
+        print "ROUND %i" % ir
         print "=========================================="
 
         for ip, params in enumerate(good_parameters):
             print "parameterset %i" % ip
             print "----------------------------------------------"
-            hyper = Hyper(datasetname)
-            hyper_init_random(hyper)
-            hyper_init(hyper)
-            hyper_init_dict(hyper, params)
-            if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
-                hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
-            sql_session.add(hyper)
+            for ia in xrange(3): # there is a lot randomness involved here
+                print "attempt %i" % ia
+                print ". . . . . . . . . . . . . . . . . . . . . ."
+                hyper = Hyper(datasetname)
+                hyper_init_random(hyper)
+                hyper_init(hyper)
+                hyper_init_dict(hyper, params)
+                if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
+                    hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
+                sql_session.add(hyper)
 
-            optimize_all(hyper)
+                optimize_all(hyper)
