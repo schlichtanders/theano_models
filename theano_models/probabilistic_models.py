@@ -464,7 +464,7 @@ class Categorical(Model):
                 Random number generator to draw samples from the distribution from.
             """
             if isinstance(probs, Number):
-                probs = as_tensor_variable(np.ones(probs)/probs)
+                probs = as_tensor_variable(np.ones(probs)/probs, "probs")
             self.rng = rng or RNG
             self.probs = probs
             self._probs = T.clip(self.probs, eps, 1 - eps)

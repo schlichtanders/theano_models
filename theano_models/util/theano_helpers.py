@@ -664,11 +664,6 @@ def independent_subgraphs(inputs1, inputs2, outputs):
     tuple with entry being list of theano-expressions which denote the end of the respective inputsX-only subgraph
     """
 
-    # TODO try to apply Canonicalize Add/Prod optimizer first and than extract subparts of Add/Prod
-    # the reason is that if there is a node Add(....) then the current algorithm will only extract the inputs as
-    # part of the independent_subgraph. However it would be far more efficient to split the Add in those which are
-    # precomputable and those which are not
-
     outputs = convert(outputs, Sequence)
     if not hasattr(outputs[0], 'clients'):
         print("SETTING CLIENTS")
@@ -758,13 +753,19 @@ def independent_subgraphs_extend_add_mul(sub):
     # TODO include constants within add/mul extension
     if not hasattr(sub[0], 'clients'):
         raise ValueError("need client information. E.g. run gof.FunctionGraph before")
-    
-    all_client_nodes = reduce(op.add, ([c[0] for c in s.clients] for s in sub))
+
+    new_sub = []
+    all_client_nodes = []
+    for s in sub:
+        for c in s.clients:
+            if c[0] == "output":  # used directly
+                new_sub.append(s)
+            else:
+                all_client_nodes.append(c[0])
     all_client_nodes = remove_duplicates(all_client_nodes)
     # further remove all clients which part of another sub (this may happen as a free variable can also be used within a more complex sub)
     remove(all_client_nodes, key=lambda c: contains_node(sub, c))
 
-    new_sub = []
     for node in all_client_nodes:
         if isinstance(node.op, Elemwise) and isinstance(node.op.scalar_op, (scalar.Add, scalar.Mul)):
             sub_i = []

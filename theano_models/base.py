@@ -183,15 +183,16 @@ class Model(MutableMapping):
                     if hasattr(x, 'name'):
                         if x.name is None:
                             x.name = "%s.%s.%i" % (self.name, k, i)
-                        # elif unique_name:
-                        #     x.name = U(x.name)
-                        # not useful, as this also applies to variables of already declared models which are reused here...
+                        # we test whether there is already a parent relationship ".", if not, add this one to create unique naming
+                        elif unique_name and "." not in x.name:
+                            x.name = "%s.%s" % (self.name, x.name)
             else:
                 if hasattr(v, 'name'):
                     if v.name is None:
                         v.name = "%s.%s" % (self.name, k)
-                    # elif unique_name:
-                        # v.name = U(v.name)
+                    # we test whether there is already a parent relationship ".", if not, add this one to create unique naming
+                    elif unique_name and "." not in v.name:
+                        v.name = "%s.%s" % (self.name, v.name)
 
         if track:
             Model.all_models.append(self)
