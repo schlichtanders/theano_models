@@ -678,7 +678,9 @@ def independent_subgraphs(inputs1, inputs2, outputs):
                     inp.clients = []
                 inp.clients.append((n,i))
         for i, out in enumerate(outputs):
-            out.client = "output", i
+            if not hasattr(out, 'clients'):
+                out.clients = []
+            out.clients.append(("output", i))
 
     # reversed descendants as we will search from outputs backwards:
     descendants1 = _collect_descendants(inputs1)[::-1]
