@@ -812,11 +812,11 @@ def independent_subgraphs_extend_add_mul(sub):
 
 
 def graphopt_merge_add_mul(inputs, outputs):
-    mode = theano.compile.get_mode(None)
+    mode = theano.compile.get_mode(None)  # None is parsed to theano.config.mode
     everything_before_fusion = theano.compile.optdb.query(mode._optimizer, position_cutoff=49)
     # opt_merge = theano.gof.MergeOptimizer()  # theano.compile.optdb['merge1']
     # opt_canonicalize = theano.compile.optdb['canonicalize'].query(mode._optimizer)
-    if mode != "FAST_COMPILE":
+    if theano.config.mode != "FAST_COMPILE":
         opt_add_mul_fusion = theano.tensor.opt.FusionOptimizer(theano.tensor.opt.local_add_mul_fusion)
 
     # stabilize = theano.compile.optdb['stabilize'].query(mode._optimizer)
@@ -828,7 +828,7 @@ def graphopt_merge_add_mul(inputs, outputs):
     # opt_canonicalize(fg)
     # opt_merge(fg)
     everything_before_fusion(fg)
-    if mode != "FAST_COMPILE":
+    if theano.config.mode != "FAST_COMPILE":
         opt_add_mul_fusion(fg)
     # no further elemwise opt fusion
     return fg.inputs, fg.outputs
