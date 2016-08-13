@@ -214,7 +214,7 @@ else:
         for ip, params in enumerate(good_parameters):
             print "parameterset %i" % ip
             print "----------------------------------------------"
-            for n_normflows in [1, 2, 3, 4, 8, 20]:
+            for n_normflows in [1, 2, 3, 8]:
                 for ia in xrange(3): # there is a lot randomness involved here
                     print "attempt %i" % ia
                     print ". . . . . . . . . . . . . . . . . . . . . ."
