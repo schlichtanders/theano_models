@@ -191,6 +191,10 @@ Proxifcation
 proxifying functions which are used everywhere and always.
 """
 
+# TODO all proxifications can take the original object (i.e. original __dict__ and __class__) instead of a copy.
+# That is extremely fast, without almost any overhead (indeed so it would be done in a completely new theano which can do
+# proxify from the start
+
 
 def prox_reparameterize(parameters, f, finv, givens={}):
     """
