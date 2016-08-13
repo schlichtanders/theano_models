@@ -144,7 +144,8 @@ sql_session = Session()
 # The function:
 sampler = experiment_toy_models.toy_likelihood().function()
 x_true = 0.65
-Z = np.array([sampler([x_true]) for n in range(1000)], dtype=theano.config.floatX)
+_x_true = np.array([x_true], dtype=theano.config.floatX)
+Z = np.array([sampler(_x_true) for n in range(1000)], dtype=theano.config.floatX)
 Z, TZ = cross_validation.train_test_split(Z, test_size=0.1)  # 10% test used in paper
 Z, VZ = cross_validation.train_test_split(Z, test_size=0.1)  # 20% validation used in paper
 data = None, Z, None, VZ, None, TZ  # None represents X data
