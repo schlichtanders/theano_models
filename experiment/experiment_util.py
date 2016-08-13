@@ -187,8 +187,8 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
             datasetname : str
             """
             self.datasetname = datasetname
-            self.logP_average_n = 10  # TODO random.choice([1,10])
-            self.errorrate_average_n = 20
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
             self.exp_average_n = 20
             self.init_results()
 
