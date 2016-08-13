@@ -791,6 +791,7 @@ def independent_subgraphs_extend_add_mul(sub):
                     inp.clients.append((new.owner, i))
 
                 s.clients = [(new.owner, len(other_i)-1)]
+                new.clients = node.outputs[0].clients
                 theano_proxify(node.outputs[0], new)  # add has only one output
             else:
                 new_sub += sub_i
