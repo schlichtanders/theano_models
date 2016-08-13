@@ -215,6 +215,8 @@ else:
             print "parameterset %i" % ip
             print "----------------------------------------------"
             for n_normflows in [1, 2, 3, 8]:
+                print "n_normflows %i" % n_normflows
+                print ".............................................."
                 for ia in xrange(3): # there is a lot randomness involved here
                     print "attempt %i" % ia
                     print ". . . . . . . . . . . . . . . . . . . . . ."
