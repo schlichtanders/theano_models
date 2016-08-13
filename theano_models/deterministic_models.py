@@ -20,7 +20,7 @@ from collections import Sequence
 
 from base import models_as_outputs, model_to_output, inputting_references, outputting_references, Model
 from base_tools import softplus
-from util import as_tensor_variable, clone, U, merge_key
+from util import as_tensor_variable, clone, merge_key
 from placeholders import Placeholder
 
 
@@ -108,8 +108,8 @@ class AffineNonlinear(Model):
             self.transfer = transfer
 
         self.weights = T.zeros((input.size, output_size))
-        self.weights.name = U("weights")
-        self.bias = as_tensor_variable(np.zeros(output_size), U("bias"))
+        self.weights.name = "weights"
+        self.bias = as_tensor_variable(np.zeros(output_size), "bias")
 
         output = self.transfer(T.dot(input, self.weights) + self.bias).flatten()  # for some reason I get a matrix here and not a vector
 
@@ -259,18 +259,18 @@ class PlanarTransform(InvertibleModel):
         else:
             input = as_tensor_variable(input)
 
-        self.b = as_tensor_variable(init_b, U("b"))
+        self.b = as_tensor_variable(init_b, "b")
         if init_w is None:
             init_w = T.ones(input.shape)
         self.w = as_tensor_variable(init_w, "w")
         if init__u is None:
             init__u = T.ones(input.shape)
-        self._u = as_tensor_variable(init__u, U("_u"))
+        self._u = as_tensor_variable(init__u, "_u")
         # this seems not reversable that easily:
         self.u = self._u + (R_to_Rplus(T.dot(self.w, self._u)) - 1 - T.dot(self.w, self._u)) * self.w / T.dot(self.w, self.w)
         # HINT: this softplus might in fact refer to a simple positive parameter, however the formula seems more complex
         # so I leave it with that
-        self.u.name = U("u")
+        self.u.name = "u"
 
         _inner = T.dot(self.w, input) + self.b
         h = h(_inner)  # make it an theano expression
@@ -307,13 +307,13 @@ class RadialTransform(InvertibleModel):
         else:
             input = as_tensor_variable(input)
 
-        self.alpha = as_tensor_variable(init_alpha, U("alpha"))
-        self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, U("beta+alpha"))
+        self.alpha = as_tensor_variable(init_alpha, "alpha")
+        self.beta_plus_alpha = as_tensor_variable(init_alpha + init_beta, "beta+alpha")
         self.beta = self.beta_plus_alpha - self.alpha
-        self.beta.name = U("beta")
+        self.beta.name = "beta"
 
         self.z0 = T.zeros(input.shape) if init_z0 is None else as_tensor_variable(init_z0)
-        self.z0.name = U("z0")
+        self.z0.name = "z0"
 
         r = (input - self.z0).norm(2)
         h = 1 / (self.alpha + r)
@@ -350,13 +350,13 @@ class LocScaleTransform(InvertibleModel):
 
         if init_loc is None:
             init_loc = T.zeros(input.shape)
-        self.loc = as_tensor_variable(init_loc, U("loc"))
+        self.loc = as_tensor_variable(init_loc, "loc")
 
         if not independent_scale and not isinstance(init_scale, Number):
             raise ValueError("if not indepent scale, only a scalar variance is needed")
         if independent_scale and isinstance(init_scale, Number):
             init_scale = T.ones(input.shape) * init_scale
-        self.scale = as_tensor_variable(init_scale, U("scale"))
+        self.scale = as_tensor_variable(init_scale, "scale")
 
         def inverse(y):
             return (y - self.loc)/self.scale
