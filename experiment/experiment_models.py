@@ -11,6 +11,7 @@ from experiment_util import track
 
 inf = float("inf")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+tm.inputting_references.update(['to_be_randomized'])
 
 __file__ = os.path.realpath(__file__)
 if platform.system() == "Windows":

@@ -15,7 +15,7 @@ from breze.learn.data import one_hot
 from theano.gof import MethodNotDefined
 
 from climin.util import optimizer
-from itertools import repeat, cycle, islice, izip
+from itertools import repeat, cycle, islice, izip, imap
 import random
 
 from schlichtanders.mycontextmanagers import ignored
@@ -187,6 +187,7 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
             datasetname : str
             """
             self.datasetname = datasetname
+            self.max_epochs_without_improvement = 30
             self.logP_average_n = 3  # TODO random.choice([1,10])
             self.errorrate_average_n = 10
             self.exp_average_n = 20
@@ -277,8 +278,11 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
         prefix += "_"
     tm.reduce_all_identities()
 
-    n_batches = X.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
+    n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+    if X is None:
+        climin_args = izip(imap(lambda x: (x,), chunk(hyper.batch_size, cycle(Z))), repeat({}))
+    else:
+        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
 
     if optimization_type == "ml": # maximum likelihood
         numericalize_kwargs = dict(
@@ -329,7 +333,10 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
             val_kwargs['no_annealing'] = True
         # start values:
         setattr(hyper, prefix + "init_params", copy(opt.wrt))
-        setattr(hyper, prefix + "best_val_loss", optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs))
+        if VX is None:
+            setattr(hyper, prefix + "best_val_loss", optimizer_kwargs['num_loss'](opt.wrt, VZ, **val_kwargs))
+        else:
+            setattr(hyper, prefix + "best_val_loss", optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs))
         # for the start no averaging is needed, as this is not crucial at all
 
         setattr(hyper, prefix + "val_loss", [])
@@ -343,9 +350,15 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
             # collect and visualize validation loss for choosing the best model
             # val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
             if hyper.logP_average_n <= 1 or optimization_type.startswith("ml"):  # maximum_likelihood already averages over each single data point
-                val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+                if VX is None:
+                    val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, **val_kwargs)
+                else:
+                    val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
             else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
-                val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
+                if VX is None:
+                    val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, **val_kwargs)
+                else:
+                    val_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, VZ, VX, **val_kwargs)
             if val_loss < getattr(hyper, prefix + "best_val_loss") - EPS:
                 setattr(hyper, prefix + "best_epoch", current_epoch)
                 setattr(hyper, prefix + "best_parameters", copy(opt.wrt))  # copy is needed as climin works inplace on array
@@ -362,7 +375,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
     except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
         _optimize(mode='FAST_COMPILE')
 
-    if getattr(hyper, prefix + "best_parameters") is not None:  # sometimes the above does not even run one epoch
+    if getattr(hyper, prefix + "best_parameters") is not None and VX is not None:  # sometimes the above does not even run one epoch
 
         # there problems with down_casting 64bit to 32bit float vectors... I cannot see where the point is, however
         # the version below works indeed

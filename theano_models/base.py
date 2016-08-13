@@ -222,6 +222,9 @@ class Model(MutableMapping):
 
         if they match in len and type, the old variables will get proxified to follow the new variables
         """
+        # TODO use proxify_once instead of proxify, meaning that proxifycation here is not meant to be recursive
+        # like it is now, but always only changes the reference here in the model
+
         # Preprocessing
         # =============
         old = self[key]
