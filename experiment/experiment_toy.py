@@ -165,7 +165,7 @@ def optimize_all(hyper):
             tm.Model.all_models = []
 
             with log_exceptions(errorfilepath, model_name, error_info):
-                model, loss, flat = getattr(experiment_toy_models, model_name)(hyper)
+                model, loss, flat, approx_posterior = getattr(experiment_toy_models, model_name)(hyper)
                 optimize(  # updates hyper inplace with results
                     prefix=model_name, data=data, hyper=hyper, model=model, loss=loss,
                     parameters=flat, error_func=error_func, optimization_type=optimization_type

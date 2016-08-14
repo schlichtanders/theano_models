@@ -312,7 +312,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
         theano.config.mode = mode
         optimizer_kwargs = tm.numericalize(
             loss, parameters,
-            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=0.5), # better more initial randomness
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=3), # better more initial randomness
             # profile=True,
             mode=mode,
             **numericalize_kwargs

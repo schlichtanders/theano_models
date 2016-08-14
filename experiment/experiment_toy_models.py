@@ -47,7 +47,7 @@ def baselinedet(hyper):
     loss = tm.loss_probabilistic(model)  # TODO no regularizer yet ...
     all_params = model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))  # should be flat already
-    return model, loss, flat
+    return model, loss, flat, None
 
 def baseline(hyper):
     # this is extremely useful to tell everything the default sizes
@@ -63,7 +63,7 @@ def baseline(hyper):
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 # PLANARFLOWS
@@ -88,7 +88,7 @@ def planarflow(hyper):
     all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def planarflowdet(hyper):
@@ -114,7 +114,7 @@ def planarflowdet(hyper):
     all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, target_normflow
 
 
 # RADIALFLOWS
@@ -141,7 +141,7 @@ def radialflow(hyper):
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def radialflowdet(hyper):
@@ -167,7 +167,7 @@ def radialflowdet(hyper):
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, target_normflow
 
 
 # MIXTURES
@@ -190,4 +190,4 @@ def mixture(hyper):
     all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
