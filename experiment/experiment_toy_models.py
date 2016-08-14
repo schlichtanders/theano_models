@@ -78,7 +78,7 @@ def planarflow(hyper):
     # LocScaleTransform for better working with PlanarTransforms
     params = params_base
     for transform in normflows:
-        params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP
+        params = tm.normalizing_flow(transform, params)  # returns transform, however with adapted logP  # TODO merge does not seem to work correctly
 
     prior = tm.fix_params(pm.DiagGauss(output_size=total_size))
     model = tm.variational_bayes(targets, 'inputs', params, priors=prior)
@@ -149,7 +149,7 @@ def radialflowdet(hyper):
     targets = toy_likelihood()
 
     target_normflow = tm.Merge(dm.RadialTransform(), inputs="to_be_randomized")  # rename inputs is crucial!!
-    for _ in range(hyper.n_normflows*2 - 1): # *2 as radial flow needs only half of the parameters
+    for _ in range(hyper.n_normflows - 1): # *2 as radial flow needs only half of the parameters
         target_normflow = tm.Merge(dm.RadialTransform(target_normflow), target_normflow)
     # target_normflow = tm.Merge(dm.LocScaleTransform(target_normflow, independent_scale=True), target_normflow)
 
