@@ -48,11 +48,16 @@ __parent__ = os.path.dirname(__path__)
 # defaults:
 foldername = "experiment"
 filename = "toy_example"
+dim = 1
 #overwrite as far as given:
-if len(sys.argv) > 2:
+if len(sys.argv) > 3:
+    foldername, filename, dim = sys.argv[1:4]
+    dim = int(literal_eval(dim))
+elif len(sys.argv) > 2:
     foldername, filename = sys.argv[1:3]
 elif len(sys.argv) > 1:
     foldername = sys.argv[1]
+
 
 with ignored(OSError):
     os.mkdir(os.path.join(__path__, foldername))
@@ -144,7 +149,6 @@ sql_session = Session()
 # pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 
 # The function:
-dim = 1
 x_true = 0.0  # 0.15
 _x_true = np.array([x_true]*dim, dtype=theano.config.floatX)
 
