@@ -85,6 +85,7 @@ class Hyper(Base):
     minus_log_s1 = Column(Integer)
     minus_log_s2 = Column(Integer)
     batch_size = Column(Integer)
+    dim = Column(Integer)
 
     n_normflows = Column(Integer)
 
@@ -103,13 +104,14 @@ class Hyper(Base):
 {0}epochs = Column(Integer)
 {0}init_params = Column(PickleType, nullable=True)
 {0}val_error_rate = Column(Float)""".format(_prefix))
-    def __init__(self, x_true):
+    def __init__(self, x_true, dim):
         """
         Parameters
         ----------
         datasetname : str
         """
         self.x_true = x_true
+        self.dim = dim
         self.max_epochs_without_improvement = 30
         self.logP_average_n = 3  # TODO random.choice([1,10])
         self.errorrate_average_n = 10
@@ -142,9 +144,11 @@ sql_session = Session()
 # pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 
 # The function:
-sampler = experiment_toy_models.toy_likelihood().function()
-x_true = 0.65
-_x_true = np.array([x_true], dtype=theano.config.floatX)
+dim = 1
+x_true = 0.0  # 0.15
+_x_true = np.array([x_true]*dim, dtype=theano.config.floatX)
+
+sampler = experiment_toy_models.toy_likelihood(dim=dim).function()
 Z = np.array([sampler(_x_true) for n in range(1000)], dtype=theano.config.floatX)
 Z, TZ = cross_validation.train_test_split(Z, test_size=0.1)  # 10% test used in paper
 Z, VZ = cross_validation.train_test_split(Z, test_size=0.1)  # 20% validation used in paper
@@ -179,13 +183,13 @@ if sample_new:
         # TODO loop over all n_normflows
         for ir in range(3):  # repeat, taking slightly different starting parameters each time
             if ir == 0:
-                hyper = Hyper(x_true)
+                hyper = Hyper(x_true, dim)
                 hyper_init_random(hyper)
                 hyper_dict = copy(hyper.__dict__)
                 pprint(hyper_dict)
                 sql_session.add(hyper)
             else:
-                hyper = Hyper(x_true)  # new hyper with same parameters
+                hyper = Hyper(x_true, dim)  # new hyper with same parameters
                 hyper_init_dict(hyper, hyper_dict)
                 sql_session.add(hyper)
 
@@ -220,7 +224,7 @@ else:
                 for ia in xrange(3): # there is a lot randomness involved here
                     print "attempt %i" % ia
                     print ". . . . . . . . . . . . . . . . . . . . . ."
-                    hyper = Hyper(x_true)
+                    hyper = Hyper(x_true, dim)
                     hyper_init_random(hyper)
                     hyper_init_dict(hyper, params)
                     hyper.n_normflows = n_normflows

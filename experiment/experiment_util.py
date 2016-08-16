@@ -312,7 +312,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
         theano.config.mode = mode
         optimizer_kwargs = tm.numericalize(
             loss, parameters,
-            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=3), # better more initial randomness
+            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=1), # better more initial randomness
             # profile=True,
             mode=mode,
             **numericalize_kwargs
@@ -394,3 +394,124 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
         setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
 
     return hyper
+
+
+def test(data, hyper, model, loss, parameters, error_func, optimization_type, init_params):
+    X, Z, VX, VZ, TX, TZ = data
+    tm.reduce_all_identities()
+
+    n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+    if X is None:
+        climin_args = izip(imap(lambda x: (x,), chunk(hyper.batch_size, cycle(Z))), repeat({}))
+    else:
+        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
+
+    if optimization_type == "ml":  # maximum likelihood
+        numericalize_kwargs = dict(
+            batch_mapreduce=meanmap,
+        )
+    elif optimization_type == "ml_exp_average":
+        numericalize_kwargs = dict(
+            batch_mapreduce=meanmap,
+            exp_average_n=hyper.exp_average_n,
+            exp_ratio_estimator=hyper.exp_ratio_estimator,
+        )
+    elif optimization_type == "annealing":
+        def weights_regularizer_1epoch():
+            for i in range(1, n_batches + 1):
+                yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
+
+        assert len(list(weights_regularizer_1epoch())) == n_batches
+        numericalize_kwargs = dict(
+            batch_mapreduce=summap,  # meaning is/must be done in Annealing
+            annealing_combiner=tm.AnnealingCombiner(
+                weights_regularizer=cycle(weights_regularizer_1epoch())
+            ),
+        )
+    else:
+        raise ValueError("Unkown type %s" % optimization_type)
+
+    def _optimize(mode='FAST_RUN'):
+        theano.config.mode = mode
+        optimizer_kwargs = tm.numericalize(
+            loss, parameters,
+            adapt_init_params=lambda ps: init_params,
+            # profile=True,
+            mode=mode,
+            **numericalize_kwargs
+        )
+
+        opt = optimizer(
+            identifier=hyper.opt_identifier,
+            step_rate=hyper.opt_step_rate,
+            momentum=hyper.opt_momentum,
+            decay=hyper.opt_decay,
+            # offset=hyper.opt_offset,
+            args=climin_args,
+            **tm.climin_kwargs(optimizer_kwargs)
+        )
+
+        test_kwargs = {}
+        if optimization_type == "annealing":
+            test_kwargs['no_annealing'] = True
+        if TX is None:
+            best_test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, **test_kwargs)
+        else:
+            best_test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, TX, **test_kwargs)
+        best_epoch = 0
+        best_parameters = None
+        # for the start no averaging is needed, as this is not crucial at all
+        # train_losses = getattr(hyper, prefix + "train_loss")
+        for info in every(n_batches, opt):
+            current_epoch = info['n_iter'] // n_batches
+            print current_epoch,
+            if current_epoch - best_epoch > hyper.max_epochs_without_improvement:
+                break
+            # collect and visualize validation loss for choosing the best model
+            # val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
+            if hyper.logP_average_n <= 1 or optimization_type.startswith("ml"):  # maximum_likelihood already averages over each single data point
+                if TX is None:
+                    test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, **test_kwargs)
+                else:
+                    test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, TX, **test_kwargs)
+            else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
+                if TX is None:
+                    test_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, TZ, **test_kwargs)
+                else:
+                    test_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, TZ, TX, **test_kwargs)
+            if test_loss < best_test_loss - EPS:
+                best_epoch = current_epoch
+                best_test_loss = test_loss
+                best_parameters = copy(opt.wrt)
+
+            # visualize training loss for comparison:
+            # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
+            # train_losses.append(training_loss)
+        print
+        return best_test_loss, best_epoch, best_parameters
+
+    try:
+        best_test_loss, best_epoch, best_params = _optimize()
+    except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
+        best_test_loss, best_epoch, best_params = _optimize(mode='FAST_COMPILE')
+
+    test_error_rate = inf
+    if best_params is not None and TX is not None:  # sometimes the above does not even run one epoch
+
+        # there problems with down_casting 64bit to 32bit float vectors... I cannot see where the point is, however
+        # the version below works indeed
+        # predict = model.function(givens={parameters: getattr(hyper, prefix + "best_parameters")}, allow_input_downcast=True)
+        # predict = lift(predict, Average(hyper.errorrate_average_n))
+        # PVX = np.apply_along_axis(predict, 1, VX)
+        # setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
+
+        # test error rate:
+        fmap_avg = Average(hyper.errorrate_average_n)
+        sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
+
+        def avg_predict(x):
+            return fmap_avg(sampler, best_params, x)
+
+        PTX = np.apply_along_axis(avg_predict, 1, TX)
+        test_error_rate = error_func(PTX, TZ)
+    return test_error_rate, best_test_loss, best_epoch, best_params

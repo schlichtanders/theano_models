@@ -14,7 +14,7 @@ from theano import config, grad
 from theano.tensor import nlinalg
 from itertools import izip
 
-from breze.arch.component import transfer as _transfer
+from util import transfer as _transfer
 
 from collections import Sequence
 
