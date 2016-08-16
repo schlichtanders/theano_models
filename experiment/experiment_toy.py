@@ -108,7 +108,8 @@ class Hyper(Base):
 {0}val_loss = Column(PickleType)
 {0}epochs = Column(Integer)
 {0}init_params = Column(PickleType, nullable=True)
-{0}val_error_rate = Column(Float)""".format(_prefix))
+{0}val_error_rate = Column(Float)
+{0}test_error_rate = Column(Float)""".format(_prefix))
     def __init__(self, x_true, dim):
         """
         Parameters
@@ -133,6 +134,7 @@ class Hyper(Base):
             setattr(self, prefix + "best_epoch", 0)
             setattr(self, prefix + "init_params", None)
             setattr(self, prefix + "val_error_rate", inf)
+            setattr(self, prefix + "test_error_rate", inf)
 
 engine = create_engine('sqlite:///' + filepath)  # os.path.join(__path__, foldername, '%s.db' % filename)
 Base.metadata.create_all(engine)

@@ -100,7 +100,7 @@ def optimize_all(hyper):
             tm.Model.all_models = []
 
             with log_exceptions(errorfilepath, model_name, error_info):
-                model, loss, flat = getattr(experiment_models, model_name)(
+                model, loss, flat, approx_posterior = getattr(experiment_models, model_name)(
                     hyper, example_input, example_output, output_transfer)
                 optimize(  # updates hyper inplace with results
                     prefix=model_name, data=data, hyper=hyper, model=model, loss=loss,

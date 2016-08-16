@@ -23,6 +23,7 @@ import heapq
 from copy import copy
 import warnings
 import experiment_toy_models
+import experiment_models
 import experiment_util
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myobjects import Namespace
@@ -180,9 +181,10 @@ def gen_subfiles(*directories, **kwargs):
     for d in directories:
         for f in os.walk(d):
             for fn in f[2]:
-                path = os.path.join(__path__, f[0], fn)
-                if key(fn, path):
-                    yield path
+                if fn.endswith(".db"):
+                    path = os.path.join(__path__, f[0], fn)
+                    if key(fn, path):
+                        yield path
 
 
 # get best hyperparameters
@@ -215,16 +217,23 @@ def get_best_hyper(folders, Hyper, model_prefixes, n_best=10, test_suffix=("best
     return best_hyper
 
 
-def sample_best_hyper(best_hyper, model_module=experiment_toy_models, n_samples=1000):
+def sample_best_hyper(best_hyper, model_module_id="toy", n_samples=1000):
+    model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
     best_hyper_samples = defaultdict(defaultdictdictlist)
     for test in best_hyper:
         for name in best_hyper[test]:
-            if name == "baselinedet":
-                continue
+            if "baselinedet" in name or "plus" in name:
+                continue  # baselinedet has no distribution, and plus has wrong parameters
             for nn in best_hyper[test][name]:  # n_normflows
-                for hyper in best_hyper[test][name][nn][1]:  # hypers
-                    model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                for ihyper, hyper in enumerate(best_hyper[test][name][nn][1]):  # hypers
                     params = getattr(hyper, name + "_best_parameters")
+                    if params is None: # best_hyper[test][name][nn][0][ihyper] == inf:
+                        continue # both test should in principal find the same error
+                        # this means, the best solution with parameters was still infinite, we have to skip it
+                    if model_module_id == "toy":
+                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                    else:
+                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
                     sampler = theano.function([], approx_posterior['outputs'], givens={flat:params})  # reduces amount of runtime
                     best_hyper_samples[test][name][nn].append( np.array([sampler() for _ in xrange(n_samples)]) )
     return best_hyper_samples
@@ -232,7 +241,24 @@ def sample_best_hyper(best_hyper, model_module=experiment_toy_models, n_samples=
 # Test error
 # ==========
 
-def compute_test_results(best_hyper, data_gen, error_func, model_module=experiment_toy_models, n_trials=20):
+def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=20):
+    """
+
+    Parameters
+    ----------
+    best_hyper
+    data_gen
+    model_module_id : str or tuple
+        either "toy",
+        or (example_input, example_output, output_transfer)
+        where output_transfer in ["linear", "softmax"]
+    n_trials
+
+    Returns
+    -------
+
+    """
+    model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
     best_tests = defaultdict(defaultdictdicttuplelist)
     for test in best_hyper:
         for name in best_hyper[test]:
@@ -244,9 +270,12 @@ def compute_test_results(best_hyper, data_gen, error_func, model_module=experime
                 for hyper in best_hyper[test][name][nn][1]:  # one because 0 refers to the performance value
                     test_results = []
                     for _ in xrange(n_trials):
-                        data = data_gen(hyper)
+                        data, error_func = data_gen(hyper)
                         init_params = getattr(hyper, name + "_init_params")
-                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                        if model_module_id == "toy":
+                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                        else:
+                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
                         test_results.append(experiment_util.test(
                             data, hyper, model, loss, flat, error_func, optimization_type, init_params
                         ))

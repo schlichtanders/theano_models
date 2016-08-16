@@ -62,7 +62,7 @@ def baselinedet(hyper, example_input, example_output, output_transfer="identity"
         all_params = model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
 
-    return model, loss, flat
+    return model, loss, flat, None
 
 
 def baselinedetplus(hyper, example_input, example_output, output_transfer="identity"):
@@ -91,7 +91,7 @@ def baselinedetplus(hyper, example_input, example_output, output_transfer="ident
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, None
 
 
 def baseline(hyper, example_input, example_output, output_transfer="identity"):
@@ -124,7 +124,7 @@ def baseline(hyper, example_input, example_output, output_transfer="identity"):
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def baselineplus(hyper, example_input, example_output, output_transfer="identity"):
@@ -156,7 +156,7 @@ def baselineplus(hyper, example_input, example_output, output_transfer="identity
     all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 # PLANARFLOWS
@@ -198,7 +198,7 @@ def planarflow(hyper, example_input, example_output, output_transfer="identity")
     all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def planarflowdet(hyper, example_input, example_output, output_transfer="identity"):
@@ -238,7 +238,7 @@ def planarflowdet(hyper, example_input, example_output, output_transfer="identit
     all_params = tm.prox_reparameterize(model['parameters_positive'], track.squareplus, track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, target_normflow
 
 
 
@@ -278,7 +278,7 @@ def planarflowml(hyper, example_input, example_output, output_transfer="identity
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 # RADIALFLOWS
@@ -321,7 +321,7 @@ def radialflow(hyper, example_input, example_output, output_transfer="identity")
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def radialflowdet(hyper, example_input, example_output, output_transfer="identity"):
@@ -362,7 +362,7 @@ def radialflowdet(hyper, example_input, example_output, output_transfer="identit
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, target_normflow
 
 
 def radialflowml(hyper, example_input, example_output, output_transfer="identity"):
@@ -401,7 +401,7 @@ def radialflowml(hyper, example_input, example_output, output_transfer="identity
                                         track.squareplus_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 # MIXTURES
@@ -440,7 +440,7 @@ def mixture(hyper, example_input, example_output, output_transfer="identity"):
     all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params
 
 
 def mixtureml(hyper, example_input, example_output, output_transfer="identity"):
@@ -476,4 +476,4 @@ def mixtureml(hyper, example_input, example_output, output_transfer="identity"):
     all_params += tm.prox_reparameterize(model['parameters_psumto1'], tm.softmax, tm.softmax_inv)
     all_params += model['parameters']
     flat = tm.prox_flatten(tm.prox_center(all_params))
-    return model, loss, flat
+    return model, loss, flat, params

@@ -126,21 +126,7 @@ def load_and_preprocess_data(datasetname):
 
 # SQLALCHEMY
 # ==========
-
-def setup_sqlite(model_prefixes, abs_path_sqlite):
-    """
-    class factory
-
-    Parameters
-    ----------
-    model_prefixes : list of str
-    abs_path_sqlite : str
-
-    Returns
-    -------
-    Hyper, session
-    Hyperparameter class for use qith sqlalchemy
-    """
+def get_hyper(model_prefixes):
     model_prefixes = map(fix_prefix, model_prefixes)
 
     Base = declarative_base()
@@ -172,7 +158,82 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
         opt_step_rate = Column(Float)
 
         for _prefix in model_prefixes:
-            exec("""
+            exec ("""
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}best_val_loss = Column(Float)
+{0}best_test_loss = Column(Float)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}epochs = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)
+{0}test_error_rate = Column(Float)""".format(_prefix))
+
+        def __init__(self, datasetname):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.datasetname = datasetname
+            self.max_epochs_without_improvement = 30
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
+            self.exp_average_n = 20
+            self.init_results()
+
+        def init_results(self):
+
+            # extra for being able to reset results for loaded hyperparameters
+            for prefix in model_prefixes:
+                setattr(self, prefix + "best_parameters", None)
+                setattr(self, prefix + "best_val_loss", inf)
+                setattr(self, prefix + "best_test_loss", inf)
+                setattr(self, prefix + "train_loss", [])
+                setattr(self, prefix + "val_loss", [])
+                setattr(self, prefix + "best_epoch", 0)
+                setattr(self, prefix + "init_params", None)
+                setattr(self, prefix + "val_error_rate", inf)
+                setattr(self, prefix + "test_error_rate", inf)
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
+
+def get_old_hyper(model_prefixes):
+    model_prefixes = map(fix_prefix, model_prefixes)
+
+    Base = declarative_base()
+
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
+
+        # hyper parameters:
+        datasetname = Column(String)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        exp_average_n = Column(Integer)
+        exp_ratio_estimator = Column(String, nullable=True)
+        units_per_layer = Column(Integer)
+        units_per_layer_plus = Column(Integer)
+        n_layers = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        for _prefix in model_prefixes:
+            exec ("""
 {0}best_val_loss = Column(Float)
 {0}best_parameters = Column(PickleType, nullable=True)
 {0}train_loss = Column(PickleType)
@@ -180,6 +241,7 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
 {0}epochs = Column(Integer)
 {0}init_params = Column(PickleType, nullable=True)
 {0}val_error_rate = Column(Float)""".format(_prefix))
+
         def __init__(self, datasetname):
             """
             Parameters
@@ -205,8 +267,28 @@ def setup_sqlite(model_prefixes, abs_path_sqlite):
                 setattr(self, prefix + "init_params", None)
                 setattr(self, prefix + "val_error_rate", inf)
 
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
+
+def setup_sqlite(model_prefixes, abs_path_sqlite):
+    """
+    class factory
+
+    Parameters
+    ----------
+    model_prefixes : list of str
+    abs_path_sqlite : str
+
+    Returns
+    -------
+    Hyper, session
+    Hyperparameter class for use qith sqlalchemy
+    """
+    Hyper = get_hyper(model_prefixes)
     engine = create_engine('sqlite:///' + abs_path_sqlite)  # os.path.join(__path__, foldername, '%s.db' % filename)
-    Base.metadata.create_all(engine)
+    Hyper.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     return Hyper, Session()
 
@@ -272,7 +354,7 @@ def hyper_init_mnist(hyper):
 # ============
 
 def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimization_type):
-    X, Z, VX, VZ = data[:4] # there might be TX, TZ, but we are not interested in them
+    X, Z, VX, VZ, TX, TZ = data[:6]
     print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
         prefix += "_"
@@ -369,13 +451,19 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
             # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
             # train_losses.append(training_loss)
         print
+        best_params = getattr(hyper, prefix + "best_parameters")
+        if best_params is not None:
+            if TX is None:
+                setattr(hyper, prefix + "best_test_loss", optimizer_kwargs['num_loss'](best_params, TZ, **val_kwargs))
+            else:
+                setattr(hyper, prefix + "best_test_loss", optimizer_kwargs['num_loss'](best_params, TZ, TX, **val_kwargs))
 
     try:
         _optimize()
     except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
         _optimize(mode='FAST_COMPILE')
 
-    if getattr(hyper, prefix + "best_parameters") is not None and VX is not None:  # sometimes the above does not even run one epoch
+    if getattr(hyper, prefix + "best_parameters") is not None:
 
         # there problems with down_casting 64bit to 32bit float vectors... I cannot see where the point is, however
         # the version below works indeed
@@ -385,18 +473,26 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
         # setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
 
         # test error rate:
-        best_params = getattr(hyper, prefix + "best_parameters")
-        fmap_avg = Average(hyper.errorrate_average_n)
-        def avg_predict(x):
-            return fmap_avg(sampler, best_params, x)
-        sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
-        PVX = np.apply_along_axis(avg_predict, 1, VX)
-        setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
+        if VX is not None or TX is not None:
+            best_params = getattr(hyper, prefix + "best_parameters")
+            fmap_avg = Average(hyper.errorrate_average_n)
+            def avg_predict(x):
+                return fmap_avg(sampler, best_params, x)
+            sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
+
+        if VX is not None:  # sometimes the above does not even run one epoch
+            PVX = np.apply_along_axis(avg_predict, 1, VX)
+            setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
+        if TX is not None:
+            PTX = np.apply_along_axis(avg_predict, 1, TX)
+            setattr(hyper, prefix + 'test_error_rate', error_func(PTX, TZ))
 
     return hyper
 
 
 def test(data, hyper, model, loss, parameters, error_func, optimization_type, init_params):
+    if hasattr(hyper, "datasetname"):
+        print hyper.datasetname
     X, Z, VX, VZ, TX, TZ = data
     tm.reduce_all_identities()
 
