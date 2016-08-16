@@ -289,7 +289,7 @@ def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=2
 # Modes
 # -----
 
-def get_best_modes(best_hyper_samples):
+def get_best_modes(best_hyper_samples, threshold_d=40):
     best_modes = defaultdict(defaultdictdictlist)
     for test in best_hyper_samples:
         for name in best_hyper_samples[test]:  # model_prefixes
@@ -298,7 +298,7 @@ def get_best_modes(best_hyper_samples):
                     # each column of samples stands for a parameter
                     for c in xrange(samples.shape[1]):
                         hist = np.histogram(samples[:,c], bins="auto")[0]
-                        best_modes[test][name][nn].append(get_modes(hist))  # just append all
+                        best_modes[test][name][nn].append(get_modes(hist, threshold_d=threshold_d))  # just append all
     return best_modes
 
 
@@ -310,8 +310,8 @@ def get_nr_modes_(best_modes):
                 best_nr_modes[test][name][nn] = Counter(map(len, best_modes[test][name][nn]))
     return best_nr_modes
 
-def get_nr_modes(best_hyper_samples):
-    best_modes = get_best_modes(best_hyper_samples)
+def get_nr_modes(best_hyper_samples, threshold_d=40):
+    best_modes = get_best_modes(best_hyper_samples, threshold_d=threshold_d)
     return get_nr_modes_(best_modes)
 
 # Correlations

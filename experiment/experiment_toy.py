@@ -102,8 +102,9 @@ class Hyper(Base):
 
     for _prefix in model_prefixes:
         exec("""
-{0}best_val_loss = Column(Float)
 {0}best_parameters = Column(PickleType, nullable=True)
+{0}best_val_loss = Column(Float)
+{0}best_test_loss = Column(Float)
 {0}train_loss = Column(PickleType)
 {0}val_loss = Column(PickleType)
 {0}epochs = Column(Integer)
@@ -129,6 +130,7 @@ class Hyper(Base):
         for prefix in model_prefixes:
             setattr(self, prefix + "best_parameters", None)
             setattr(self, prefix + "best_val_loss", inf)
+            setattr(self, prefix + "best_test_loss", inf)
             setattr(self, prefix + "train_loss", [])
             setattr(self, prefix + "val_loss", [])
             setattr(self, prefix + "best_epoch", 0)
