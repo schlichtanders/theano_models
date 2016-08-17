@@ -161,7 +161,7 @@ else:
                 X = original_X[:new_length]
                 Z = original_Z[:new_length]
                 for nn in n_normflows:
-                    print "n_normflows %i" % n_normflows
+                    print "n_normflows %i" % nn
                     print ".............................................."
                     for ia in xrange(1): # there is a lot randomness involved here
                         print "attempt %i" % ia
