@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from schlichtanders.mymatplotlib import Centre
 from matplotlib.colors import LogNorm
-
+import cPickle as pickle
 import os, platform, sys
 from pprint import pprint
 from sqlalchemy import Column, Integer, Unicode, UnicodeText, String, PickleType, Float, Boolean
@@ -163,14 +163,19 @@ def get_modes(hist, threshold_d=40, start_end_bottom=True):
 def defaultdictdict():
     return defaultdict(dict)
 
+def defaultdictlist():
+    return defaultdict(list)
+
 def defaultdictdictlist():
-    def defaultdictlist():
-        return defaultdict(list)
     return defaultdict(defaultdictlist)
 
+def tuple4list():
+    return [], [], [], []
+
+def defaultdicttuplelist():
+    return defaultdict(tuple4list)
+
 def defaultdictdicttuplelist():
-    def defaultdicttuplelist():
-        return defaultdict(lambda: ([], [], [], []))
     return defaultdict(defaultdicttuplelist)
 
 def defaultdictlist():
@@ -240,6 +245,13 @@ def sample_best_hyper(best_hyper, model_module_id="toy", n_samples=1000):
 
 # Test error
 # ==========
+def load_test_results(datasetname):
+    save_fn = "%s.pkl" % datasetname
+    save_path = os.path.join(__path__, "eval_test", save_fn)
+    with open(save_path, "rb") as f:
+        results_dict = pickle.load(f)
+    return results_dict
+
 
 def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=20):
     """
@@ -258,10 +270,18 @@ def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=2
     -------
 
     """
+    try:
+        os.mkdir(os.path.join(__path__, "eval_test"))
+    except OSError:
+        pass
+    ex_hyper = best_hyper["best_val_loss"]["baseline"][1][1][0] # the very first baseline nnormflows=1 hyper
+    save_fn = "%s.pkl" % (ex_hyper.datasetname if hasattr(ex_hyper, "datasetname") else "toy%id"%ex_hyper.dim)
+    save_path = os.path.join(__path__, "eval_test", save_fn)
     model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
     best_tests = defaultdict(defaultdictdicttuplelist)
     for test in best_hyper:
         for name in best_hyper[test]:
+            print(name)
             if name == "baselinedet":
                 optimization_type = "ml"
             else:
@@ -284,6 +304,9 @@ def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=2
                     best_tests[test][name][nn][1].append(np.array(best_test_loss))
                     best_tests[test][name][nn][2].append(np.array(best_epoch))
                     best_tests[test][name][nn][3].append(np.array(best_params))
+                    with open(save_path, "wb") as f:
+                        pickle.dump(best_tests, f, -1)
+
     return best_tests
 
 # Modes
@@ -340,16 +363,14 @@ def kl_hist(hist1, hist2):
     return maybe_nans.sum()
 
 def compute_kl(best_hyper_samples):
-    ex_test_dict = next(best_hyper_samples.itervalues())
-    ex_name_dict = next(ex_test_dict.itervalues())
-    ex_normflow_list = next(ex_name_dict.itervalues())
-    dimensionality = ex_normflow_list[1].shape[1]  # nr columns is dimensionality
+    test_attrs = sorted(best_hyper_samples.keys())
+    model_prefixes = sorted(best_hyper_samples[test_attrs[0]].keys())
+    ln = len(model_prefixes)
+    n_normflows = sorted(best_hyper_samples[test_attrs[0]][model_prefixes[0]].keys())  # assumed to be the same overall
+    n_best = len(best_hyper_samples[test_attrs[0]][model_prefixes[0]][n_normflows[0]])  # assumed to be the same overall
+    dimensionality = best_hyper_samples[test_attrs[0]][model_prefixes[0]][n_normflows[0]][1].shape[1] # nr columns is dimensionality
     best_kl = defaultdict(defaultdictlist)
     for test in best_hyper_samples:
-        model_prefixes = best_hyper_samples[test].keys()
-        ln = len(model_prefixes)
-        n_normflows = best_hyper_samples[test][model_prefixes[0]].keys()  # assumed to be the same overall
-        n_best = len(best_hyper_samples[test][model_prefixes[0]][n_normflows[0]])  # assumed to be the same overall
         for nn in n_normflows:
             for i in xrange(n_best):
                 kl_matrix = np.zeros((ln, ln))

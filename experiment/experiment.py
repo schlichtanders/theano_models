@@ -83,6 +83,8 @@ hyper_init = hyper_init_mnist if datasetname=="mnist" else hyper_init_several
 # ====
 data, error_func = load_and_preprocess_data(datasetname)
 X, Z, VX, VZ, TX, TZ = data
+original_X = X
+original_Z = Z
 example_input = X[0]
 example_output = Z[0]
 output_transfer = "softmax" if datasetname=="mnist" else "identity"
@@ -92,6 +94,7 @@ output_transfer = "softmax" if datasetname=="mnist" else "identity"
 # Main Loop
 # =========
 def optimize_all(hyper):
+    data = X, Z, VX, VZ, TX, TZ  # as we change X and Z during the script
     error_info = {k: v for k, v in hyper.__dict__.iteritems() if k[:4] not in ["base", "plana", "mixt", "radi"]}
     for optimization_type in model_names:
         for model_name in model_names[optimization_type]:
@@ -130,6 +133,7 @@ if sample_new:
 
 # use already found parameters which seem good
 else:
+    n_normflows = [1, 2, 3, 4, 8, 20]
     good_parameters = []
     with open(csvpath, "r") as f:
         reader = csv.DictReader(f, quoting=csv.QUOTE_NONE)
@@ -150,15 +154,25 @@ else:
         for ip, params in enumerate(good_parameters):
             print "parameterset %i" % ip
             print "----------------------------------------------"
-            for ia in xrange(3): # there is a lot randomness involved here
-                print "attempt %i" % ia
-                print ". . . . . . . . . . . . . . . . . . . . . ."
-                hyper = Hyper(datasetname)
-                hyper_init_random(hyper)
-                hyper_init(hyper)
-                hyper_init_dict(hyper, params)
-                if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
-                    hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
-                sql_session.add(hyper)
+            for percent in [0.25, 0.5, 1]:
+                print "percentage of data %.2f" % percent
+                print "- - - - - -  - - - - -  - - - -  - - -  - - - "
+                new_length = int(len(original_X) * percent)
+                X = original_X[:new_length]
+                Z = original_Z[:new_length]
+                for nn in n_normflows:
+                    print "n_normflows %i" % n_normflows
+                    print ".............................................."
+                    for ia in xrange(1): # there is a lot randomness involved here
+                        print "attempt %i" % ia
+                        print ". . . . . . . . . . . . . . . . . . . . . ."
+                        hyper = Hyper(datasetname)
+                        hyper_init_random(hyper)
+                        hyper_init(hyper)
+                        hyper_init_dict(hyper, params)
+                        if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
+                            hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
+                        hyper.n_normflows = nn
+                        sql_session.add(hyper)
 
-                optimize_all(hyper)
+                        optimize_all(hyper)

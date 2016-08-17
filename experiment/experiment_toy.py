@@ -165,7 +165,6 @@ error_func = RMSE
 
 # TODO the above randomly splits the dataset, which should be averaged out ideally... however with same initial parameters... that makes it difficult
 
-
 # Main Loop
 # =========
 def optimize_all(hyper):
@@ -226,10 +225,12 @@ else:
         for ip, params in enumerate(good_parameters):
             print "parameterset %i" % ip
             print "----------------------------------------------"
+            sql_session = Session()
+
             for n_normflows in [1, 2, 3, 8]:
                 print "n_normflows %i" % n_normflows
                 print ".............................................."
-                for ia in xrange(3): # there is a lot randomness involved here
+                for ia in xrange(2): # there is a lot randomness involved here
                     print "attempt %i" % ia
                     print ". . . . . . . . . . . . . . . . . . . . . ."
                     hyper = Hyper(x_true, dim)
