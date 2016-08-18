@@ -11,6 +11,9 @@ import itertools
 import numpy as np
 import csv
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myobjects import NestedNamespace, Namespace
 
@@ -21,8 +24,8 @@ from theano.tensor.shared_randomstreams import RandomStreams
 from copy import copy
 import warnings
 
-from experiment_util import log_exceptions, setup_sqlite, hyper_init_dict, hyper_init_random, \
-    optimize, load_and_preprocess_data, hyper_init_several, hyper_init_mnist
+from experiment_util import log_exceptions, hyper_init_dict, hyper_init_random, \
+    optimize, load_and_preprocess_data, hyper_init_several, hyper_init_mnist, get_hyper
 import experiment_models
 
 inf = float("inf")
@@ -75,7 +78,12 @@ model_names = { # sorted by optimization type
 # Hyperparameters
 # ===============
 
-Hyper, sql_session = setup_sqlite(model_prefixes=reduce(op.add, model_names.values()), abs_path_sqlite=filepath)
+Hyper = get_hyper(reduce(op.add, model_names.values()))
+engine = create_engine('sqlite:///' + filepath)  # os.path.join(__path__, foldername, '%s.db' % filename)
+Hyper.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+sql_session = Session()
+
 hyper_init = hyper_init_mnist if datasetname=="mnist" else hyper_init_several
 
 
@@ -170,9 +178,10 @@ else:
                         hyper_init_random(hyper)
                         hyper_init(hyper)
                         hyper_init_dict(hyper, params)
+                        hyper.n_normflows = nn
+                        hyper.percent = percent
                         if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
                             hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
-                        hyper.n_normflows = nn
                         sql_session.add(hyper)
 
                         optimize_all(hyper)

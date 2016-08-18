@@ -31,8 +31,8 @@ from theano.tensor.shared_randomstreams import RandomStreams
 from copy import copy
 import warnings
 
-from experiment_util import log_exceptions, setup_sqlite, hyper_init_dict, hyper_init_random, \
-    optimize, load_and_preprocess_data, hyper_init_several, hyper_init_mnist, RMSE
+from experiment_util import log_exceptions, hyper_init_dict, hyper_init_random, \
+    optimize, load_and_preprocess_data, hyper_init_several, hyper_init_mnist, RMSE, get_toy_hyper
 import experiment_toy_models
 
 inf = float("inf")
@@ -76,75 +76,11 @@ model_prefixes = [p+"_" for p in model_prefixes]
 # Hyperparameters
 # ===============
 
-Base = declarative_base()
-
-class Hyper(Base):
-    __tablename__ = "hyper"
-    id = Column(Integer, primary_key=True)
-
-    # hyper parameters:
-    x_true = Column(Float)
-    max_epochs_without_improvement = Column(Integer)
-    logP_average_n = Column(Integer)
-    errorrate_average_n = Column(Integer)
-    minus_log_s1 = Column(Integer)
-    minus_log_s2 = Column(Integer)
-    batch_size = Column(Integer)
-    dim = Column(Integer)
-
-    n_normflows = Column(Integer)
-
-    opt_identifier = Column(String)
-    opt_momentum = Column(Float)
-    opt_offset = Column(Float)
-    opt_decay = Column(Float)
-    opt_step_rate = Column(Float)
-
-    for _prefix in model_prefixes:
-        exec("""
-{0}best_parameters = Column(PickleType, nullable=True)
-{0}best_val_loss = Column(Float)
-{0}best_test_loss = Column(Float)
-{0}train_loss = Column(PickleType)
-{0}val_loss = Column(PickleType)
-{0}epochs = Column(Integer)
-{0}init_params = Column(PickleType, nullable=True)
-{0}val_error_rate = Column(Float)
-{0}test_error_rate = Column(Float)""".format(_prefix))
-    def __init__(self, x_true, dim):
-        """
-        Parameters
-        ----------
-        datasetname : str
-        """
-        self.x_true = x_true
-        self.dim = dim
-        self.max_epochs_without_improvement = 30
-        self.logP_average_n = 3  # TODO random.choice([1,10])
-        self.errorrate_average_n = 10
-        self.init_results()
-
-    def init_results(self):
-
-        # extra for being able to reset results for loaded hyperparameters
-        for prefix in model_prefixes:
-            setattr(self, prefix + "best_parameters", None)
-            setattr(self, prefix + "best_val_loss", inf)
-            setattr(self, prefix + "best_test_loss", inf)
-            setattr(self, prefix + "train_loss", [])
-            setattr(self, prefix + "val_loss", [])
-            setattr(self, prefix + "best_epoch", 0)
-            setattr(self, prefix + "init_params", None)
-            setattr(self, prefix + "val_error_rate", inf)
-            setattr(self, prefix + "test_error_rate", inf)
-
+Hyper = get_toy_hyper()
 engine = create_engine('sqlite:///' + filepath)  # os.path.join(__path__, foldername, '%s.db' % filename)
-Base.metadata.create_all(engine)
+Hyper.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 sql_session = Session()
-
-
-
 
 
 # DATA
@@ -161,6 +97,7 @@ Z = np.array([sampler(_x_true) for n in range(1000)], dtype=theano.config.floatX
 Z, TZ = cross_validation.train_test_split(Z, test_size=0.1)  # 10% test used in paper
 Z, VZ = cross_validation.train_test_split(Z, test_size=0.1)  # 20% validation used in paper
 data = None, Z, None, VZ, None, TZ  # None represents X data
+original_Z = Z
 error_func = RMSE
 
 # TODO the above randomly splits the dataset, which should be averaged out ideally... however with same initial parameters... that makes it difficult
@@ -168,6 +105,7 @@ error_func = RMSE
 # Main Loop
 # =========
 def optimize_all(hyper):
+    data = None, Z, None, VZ, None, TZ  # None represents X data
     error_info = {k: v for k, v in hyper.__dict__.iteritems() if k[:4] not in ["base", "plana", "mixt", "radi"]}
     for optimization_type in model_names:
         for model_name in model_names[optimization_type]:
@@ -227,16 +165,23 @@ else:
             print "----------------------------------------------"
             sql_session = Session()
 
-            for n_normflows in [1, 2, 3, 8]:
-                print "n_normflows %i" % n_normflows
-                print ".............................................."
-                for ia in xrange(2): # there is a lot randomness involved here
-                    print "attempt %i" % ia
-                    print ". . . . . . . . . . . . . . . . . . . . . ."
-                    hyper = Hyper(x_true, dim)
-                    hyper_init_random(hyper)
-                    hyper_init_dict(hyper, params)
-                    hyper.n_normflows = n_normflows
+            for percent in [0.25, 0.5, 1]:
+                print "percentage of data %.2f" % percent
+                print "- - - - - -  - - - - -  - - - -  - - -  - - - "
+                new_length = int(len(original_Z) * percent)
+                Z = original_Z[:new_length]
 
-                    sql_session.add(hyper)
-                    optimize_all(hyper)
+                for n_normflows in [1, 2, 3, 4, 8, 20]:
+                    print "n_normflows %i" % n_normflows
+                    print ".............................................."
+                    for ia in xrange(2): # there is a lot randomness involved here
+                        print "attempt %i" % ia
+                        print ". . . . . . . . . . . . . . . . . . . . . ."
+                        hyper = Hyper(x_true, dim)
+                        hyper_init_random(hyper)
+                        hyper_init_dict(hyper, params)
+                        hyper.n_normflows = n_normflows
+                        hyper.percent = percent
+
+                        sql_session.add(hyper)
+                        optimize_all(hyper)

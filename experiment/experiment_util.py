@@ -126,9 +126,87 @@ def load_and_preprocess_data(datasetname):
 
 # SQLALCHEMY
 # ==========
-def get_hyper(model_prefixes):
+def get_hyper(model_prefixes=('baselinedet', 'baselinedetplus', 'baseline', 'baselineplus', 'mixture',
+                  'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
     model_prefixes = map(fix_prefix, model_prefixes)
+    Base = declarative_base()
 
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
+
+        # hyper parameters:
+        datasetname = Column(String)
+        percent = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        exp_average_n = Column(Integer)
+        exp_ratio_estimator = Column(String, nullable=True)
+        units_per_layer = Column(Integer)
+        units_per_layer_plus = Column(Integer)
+        n_layers = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        for _prefix in model_prefixes:
+            exec ("""
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}best_val_loss = Column(Float)
+{0}best_test_loss = Column(Float)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}best_epoch = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)
+{0}test_error_rate = Column(Float)""".format(_prefix))
+
+        def __init__(self, datasetname):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.datasetname = datasetname
+            self.percent = 1.0
+            self.max_epochs_without_improvement = 30
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
+            self.exp_average_n = 20
+            self.init_results()
+
+        def init_results(self):
+
+            # extra for being able to reset results for loaded hyperparameters
+            for prefix in model_prefixes:
+                setattr(self, prefix + "best_parameters", None)
+                setattr(self, prefix + "best_val_loss", inf)
+                setattr(self, prefix + "best_test_loss", inf)
+                setattr(self, prefix + "train_loss", [])
+                setattr(self, prefix + "val_loss", [])
+                setattr(self, prefix + "best_epoch", 0)
+                setattr(self, prefix + "init_params", None)
+                setattr(self, prefix + "val_error_rate", inf)
+                setattr(self, prefix + "test_error_rate", inf)
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
+
+def get_semiold_hyper(model_prefixes=('baselinedet', 'baselinedetplus', 'baseline', 'baselineplus', 'mixture',
+                                  'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
+
+    model_prefixes = map(fix_prefix, model_prefixes)
     Base = declarative_base()
 
     class Hyper(Base):
@@ -191,7 +269,7 @@ def get_hyper(model_prefixes):
                 setattr(self, prefix + "best_test_loss", inf)
                 setattr(self, prefix + "train_loss", [])
                 setattr(self, prefix + "val_loss", [])
-                setattr(self, prefix + "best_epoch", 0)
+                setattr(self, prefix + "epochs", 0)
                 setattr(self, prefix + "init_params", None)
                 setattr(self, prefix + "val_error_rate", inf)
                 setattr(self, prefix + "test_error_rate", inf)
@@ -201,9 +279,10 @@ def get_hyper(model_prefixes):
 
     return Hyper
 
-def get_old_hyper(model_prefixes):
-    model_prefixes = map(fix_prefix, model_prefixes)
 
+def get_old_hyper(model_prefixes=('baselinedet', 'baselinedetplus', 'baseline', 'baselineplus', 'mixture',
+                  'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
+    model_prefixes = map(fix_prefix, model_prefixes)
     Base = declarative_base()
 
     class Hyper(Base):
@@ -263,7 +342,7 @@ def get_old_hyper(model_prefixes):
                 setattr(self, prefix + "best_val_loss", inf)
                 setattr(self, prefix + "train_loss", [])
                 setattr(self, prefix + "val_loss", [])
-                setattr(self, prefix + "best_epoch", 0)
+                setattr(self, prefix + "epochs", 0)
                 setattr(self, prefix + "init_params", None)
                 setattr(self, prefix + "val_error_rate", inf)
 
@@ -272,25 +351,216 @@ def get_old_hyper(model_prefixes):
 
     return Hyper
 
-def setup_sqlite(model_prefixes, abs_path_sqlite):
-    """
-    class factory
+def get_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
+                                  'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
+    model_prefixes = map(fix_prefix, model_prefixes)
+    Base = declarative_base()
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
 
-    Parameters
-    ----------
-    model_prefixes : list of str
-    abs_path_sqlite : str
+        # hyper parameters:
+        x_true = Column(Float)
+        percent = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+        dim = Column(Integer)
 
-    Returns
-    -------
-    Hyper, session
-    Hyperparameter class for use qith sqlalchemy
-    """
-    Hyper = get_hyper(model_prefixes)
-    engine = create_engine('sqlite:///' + abs_path_sqlite)  # os.path.join(__path__, foldername, '%s.db' % filename)
-    Hyper.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    return Hyper, Session()
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        for _prefix in model_prefixes:
+            exec("""
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}best_val_loss = Column(Float)
+{0}best_test_loss = Column(Float)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}best_epoch = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)
+{0}test_error_rate = Column(Float)""".format(_prefix))
+        def __init__(self, x_true, dim):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.x_true = x_true
+            self.dim = dim
+            self.percent = 1.0
+            self.max_epochs_without_improvement = 30
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
+            self.init_results()
+
+        def init_results(self):
+
+            # extra for being able to reset results for loaded hyperparameters
+            for prefix in model_prefixes:
+                setattr(self, prefix + "best_parameters", None)
+                setattr(self, prefix + "best_val_loss", inf)
+                setattr(self, prefix + "best_test_loss", inf)
+                setattr(self, prefix + "train_loss", [])
+                setattr(self, prefix + "val_loss", [])
+                setattr(self, prefix + "best_epoch", 0)
+                setattr(self, prefix + "init_params", None)
+                setattr(self, prefix + "val_error_rate", inf)
+                setattr(self, prefix + "test_error_rate", inf)
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
+
+
+
+def get_semiold_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
+                                      'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
+
+    model_prefixes = map(fix_prefix, model_prefixes)
+    Base = declarative_base()
+
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
+
+        # hyper parameters:
+        x_true = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+        dim = Column(Integer)
+
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        for _prefix in model_prefixes:
+            exec ("""
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}best_val_loss = Column(Float)
+{0}best_test_loss = Column(Float)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}epochs = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)
+{0}test_error_rate = Column(Float)""".format(_prefix))
+
+        def __init__(self, x_true, dim):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.x_true = x_true
+            self.dim = dim
+            self.max_epochs_without_improvement = 30
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
+            self.init_results()
+
+        def init_results(self):
+
+            # extra for being able to reset results for loaded hyperparameters
+            for prefix in model_prefixes:
+                setattr(self, prefix + "best_parameters", None)
+                setattr(self, prefix + "best_val_loss", inf)
+                setattr(self, prefix + "best_test_loss", inf)
+                setattr(self, prefix + "train_loss", [])
+                setattr(self, prefix + "val_loss", [])
+                setattr(self, prefix + "epochs", 0)
+                setattr(self, prefix + "init_params", None)
+                setattr(self, prefix + "val_error_rate", inf)
+                setattr(self, prefix + "test_error_rate", inf)
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+
+    return Hyper
+
+def get_toy_old_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
+                                      'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
+    model_prefixes = map(fix_prefix, model_prefixes)
+    Base = declarative_base()
+
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
+
+        # hyper parameters:
+        x_true = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        for _prefix in model_prefixes:
+            exec ("""
+{0}best_val_loss = Column(Float)
+{0}best_parameters = Column(PickleType, nullable=True)
+{0}train_loss = Column(PickleType)
+{0}val_loss = Column(PickleType)
+{0}epochs = Column(Integer)
+{0}init_params = Column(PickleType, nullable=True)
+{0}val_error_rate = Column(Float)""".format(_prefix))
+
+        def __init__(self, x_true):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.x_true = x_true
+            self.max_epochs_without_improvement = 30
+            self.logP_average_n = 3  # TODO random.choice([1,10])
+            self.errorrate_average_n = 10
+            self.init_results()
+
+        def init_results(self):
+
+            # extra for being able to reset results for loaded hyperparameters
+            for prefix in model_prefixes:
+                setattr(self, prefix + "best_parameters", None)
+                setattr(self, prefix + "best_val_loss", inf)
+                setattr(self, prefix + "train_loss", [])
+                setattr(self, prefix + "val_loss", [])
+                setattr(self, prefix + "epochs", 0)
+                setattr(self, prefix + "init_params", None)
+                setattr(self, prefix + "val_error_rate", inf)
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
 
 
 def hyper_init_dict(hyper, hyper_dict, prefix="", do_copy=True):
@@ -490,7 +760,7 @@ def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimizat
     return hyper
 
 
-def test(data, hyper, model, loss, parameters, error_func, optimization_type, init_params):
+def test(data, hyper, model, loss, parameters, error_func, optimization_type, init_params=None):
     X, Z, VX, VZ, TX, TZ = data
     tm.reduce_all_identities()
 
@@ -525,134 +795,17 @@ def test(data, hyper, model, loss, parameters, error_func, optimization_type, in
     else:
         raise ValueError("Unkown type %s" % optimization_type)
 
+    if init_params is None:
+        def adapt_init_params(ps):
+            return ps + np.random.normal(size=ps.size, scale=1) # better more initial randomness
+    else:
+        def adapt_init_params(ps):
+            return init_params
     def _optimize(mode='FAST_RUN'):
         theano.config.mode = mode
         optimizer_kwargs = tm.numericalize(
             loss, parameters,
-            adapt_init_params=lambda ps: ps + np.random.normal(size=ps.size, scale=1), # better more initial randomness
-            # profile=True,
-            mode=mode,
-            **numericalize_kwargs
-        )
-
-        opt = optimizer(
-            identifier=hyper.opt_identifier,
-            step_rate=hyper.opt_step_rate,
-            momentum=hyper.opt_momentum,
-            decay=hyper.opt_decay,
-            # offset=hyper.opt_offset,
-            args=climin_args,
-            **tm.climin_kwargs(optimizer_kwargs)
-        )
-
-        test_kwargs = {}
-        if optimization_type == "annealing":
-            test_kwargs['no_annealing'] = True
-        if TX is None:
-            best_test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, **test_kwargs)
-        else:
-            best_test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, TX, **test_kwargs)
-        best_epoch = 0
-        best_parameters = None
-        # for the start no averaging is needed, as this is not crucial at all
-        # train_losses = getattr(hyper, prefix + "train_loss")
-        for info in every(n_batches, opt):
-            current_epoch = info['n_iter'] // n_batches
-            print current_epoch,
-            if current_epoch - best_epoch > hyper.max_epochs_without_improvement:
-                break
-            # collect and visualize validation loss for choosing the best model
-            # val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
-            if hyper.logP_average_n <= 1 or optimization_type.startswith("ml"):  # maximum_likelihood already averages over each single data point
-                if TX is None:
-                    test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, **test_kwargs)
-                else:
-                    test_loss = optimizer_kwargs['num_loss'](opt.wrt, TZ, TX, **test_kwargs)
-            else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
-                if TX is None:
-                    test_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, TZ, **test_kwargs)
-                else:
-                    test_loss = Average(hyper.logP_average_n)(optimizer_kwargs['num_loss'], opt.wrt, TZ, TX, **test_kwargs)
-            if test_loss < best_test_loss - EPS:
-                best_epoch = current_epoch
-                best_test_loss = test_loss
-                best_parameters = copy(opt.wrt)
-
-            # visualize training loss for comparison:
-            # training_loss = optimizer_kwargs['num_loss'](opt.wrt, Z[:10], X[:10], no_annealing=True)
-            # train_losses.append(training_loss)
-        print
-        return best_test_loss, best_epoch, best_parameters
-
-    try:
-        best_test_loss, best_epoch, best_params = _optimize()
-    except MethodNotDefined:  # this always refers to the limit of 32 nodes per ufunc... weird issue
-        best_test_loss, best_epoch, best_params = _optimize(mode='FAST_COMPILE')
-
-    test_error_rate = inf
-    if best_params is not None and TX is not None:  # sometimes the above does not even run one epoch
-
-        # there problems with down_casting 64bit to 32bit float vectors... I cannot see where the point is, however
-        # the version below works indeed
-        # predict = model.function(givens={parameters: getattr(hyper, prefix + "best_parameters")}, allow_input_downcast=True)
-        # predict = lift(predict, Average(hyper.errorrate_average_n))
-        # PVX = np.apply_along_axis(predict, 1, VX)
-        # setattr(hyper, prefix + 'val_error_rate', error_func(PVX, VZ))
-
-        # test error rate:
-        fmap_avg = Average(hyper.errorrate_average_n)
-        sampler = theano.function([parameters] + model['inputs'], model['outputs'], allow_input_downcast=True)
-
-        def avg_predict(x):
-            return fmap_avg(sampler, best_params, x)
-
-        PTX = np.apply_along_axis(avg_predict, 1, TX)
-        test_error_rate = error_func(PTX, TZ)
-    return test_error_rate, best_test_loss, best_epoch, best_params
-
-
-
-
-def test_new_initial(data, hyper, model, loss, parameters, error_func, optimization_type):
-    X, Z, VX, VZ, TX, TZ = data
-    tm.reduce_all_identities()
-
-    n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    if X is None:
-        climin_args = izip(imap(lambda x: (x,), chunk(hyper.batch_size, cycle(Z))), repeat({}))
-    else:
-        climin_args = izip(izip(chunk(hyper.batch_size, cycle(Z)), chunk(hyper.batch_size, cycle(X))), repeat({}))
-
-    if optimization_type == "ml":  # maximum likelihood
-        numericalize_kwargs = dict(
-            batch_mapreduce=meanmap,
-        )
-    elif optimization_type == "ml_exp_average":
-        numericalize_kwargs = dict(
-            batch_mapreduce=meanmap,
-            exp_average_n=hyper.exp_average_n,
-            exp_ratio_estimator=hyper.exp_ratio_estimator,
-        )
-    elif optimization_type == "annealing":
-        def weights_regularizer_1epoch():
-            for i in range(1, n_batches + 1):
-                yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
-
-        assert len(list(weights_regularizer_1epoch())) == n_batches
-        numericalize_kwargs = dict(
-            batch_mapreduce=summap,  # meaning is/must be done in Annealing
-            annealing_combiner=tm.AnnealingCombiner(
-                weights_regularizer=cycle(weights_regularizer_1epoch())
-            ),
-        )
-    else:
-        raise ValueError("Unkown type %s" % optimization_type)
-
-    def _optimize(mode='FAST_RUN'):
-        theano.config.mode = mode
-        optimizer_kwargs = tm.numericalize(
-            loss, parameters,
-            adapt_init_params=lambda ps: init_params,
+            adapt_init_params=adapt_init_params,
             # profile=True,
             mode=mode,
             **numericalize_kwargs

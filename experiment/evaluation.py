@@ -163,6 +163,9 @@ def get_modes(hist, threshold_d=40, start_end_bottom=True):
 def defaultdictdict():
     return defaultdict(dict)
 
+def defaultdictdictdict():
+    return defaultdictdict()
+
 def defaultdictlist():
     return defaultdict(list)
 
@@ -195,7 +198,52 @@ def gen_subfiles(*directories, **kwargs):
 # get best hyperparameters
 # ------------------------
 
-def get_best_hyper(folders, Hyper, model_prefixes, n_best=10, test_suffix=("best_val_loss", "val_error_rate"), key=lambda fn, path:True):
+def fmap_results(f, results, inplace=False):
+    new = results if inplace else defaultdict(defaultdictdict)
+    for test in results:
+        for name in results[test]:
+            for nn in results[test][name]:
+                new[test][name][nn] = f(results[test][name][nn])
+    return new
+
+def reduce_results(f, results, acc=0):
+    for test in results:
+        for name in results[test]:
+            for nn in results[test][name]:
+                acc = f(acc, results[test][name][nn])
+    return acc
+
+
+def to_pandas_dict(datasetname, best_hyper, pandas_dict=None, last_layer_to_dict=None):
+    if pandas_dict is None:
+        pandas_dict = defaultdict(list, {
+            'datasetname': [],
+            'test_measures': [],
+            'model': [],
+            'n_normflows': [],
+        })
+    if last_layer_to_dict is None:
+        def last_layer_to_dict(last_layer):
+            return {"value%i"%i: v for i, v in enumerate(last_layer[0])}  # for best_hyper
+
+    for test in best_hyper:
+        for name in best_hyper[test]:
+            for nn in best_hyper[test][name]:
+                pandas_dict['datasetname'].append(datasetname)
+                pandas_dict['test_measures'].append(test)
+                pandas_dict['model'].append(name)
+                pandas_dict['n_normflows'].append(nn)
+                pandas_dict.update()
+                for k, v in last_layer_to_dict(best_hyper[test][name][nn]).iteritems():
+                    pandas_dict[k].append(v)
+#                 for i, v in enumerate(best_hyper[test][name][nn][0]):
+#                     vn = "value%i" % i
+#                     pandas_dict[vn].append(v)
+    return pandas_dict
+
+# -------------------------------
+
+def get_best_hyper(folders, Hyper, model_prefixes, test_suffix=("best_val_loss", "val_error_rate"), key=lambda fn, path:True):
     all_data = []
     for f in gen_subfiles(*folders, key=key): #"toy_windows", "toy_linux"):
         engine = create_engine('sqlite:///' + f)
@@ -204,36 +252,42 @@ def get_best_hyper(folders, Hyper, model_prefixes, n_best=10, test_suffix=("best
         all_data += session.query(Hyper).all()  # filter if you want
 
     n_normflows = set(h.n_normflows for h in all_data)
-    best_hyper = defaultdict(defaultdictdict)
-    for prefix in model_prefixes:
-        def key(h):
-            if getattr(h, prefix + "_best_parameters") is None:
-                return inf
-            return getattr(h, attr)
+    best_hyper = {}
+    for suffix in test_suffix:
+        best_hyper[suffix] = {}
+        for prefix in model_prefixes:
+            best_hyper[suffix][prefix] = {}
+            def key(h):
+                if getattr(h, prefix + "_best_parameters") is None:
+                    return inf
+                return getattr(h, attr)
 
-        for nn in n_normflows:
-            for suffix in test_suffix:
+            for nn in n_normflows:
                 attr = prefix + "_" + suffix
                 # find best fit
                 all_data_nn = [h for h in all_data if h.n_normflows == nn]
-                entries = heapq.nsmallest(n_best, all_data_nn, key=key)
-                values = map(op.attrgetter(attr), entries)
-                best_hyper[suffix][prefix][nn] = values, entries
+                hyper = heapq.nsmallest(1, all_data_nn, key=key)[0]  # only the very best is wanted to keep it simple and clean
+                value = getattr(hyper, attr) #map(op.attrgetter(attr), entries)
+                best_hyper[suffix][prefix][nn] = value, hyper
     return best_hyper
 
 
-def sample_best_hyper(best_hyper, model_module_id="toy", n_samples=1000):
+def sample_best_hyper(best_hyper, best_tests, model_module_id="toy", n_samples=1000):
     model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
-    best_hyper_samples = defaultdict(defaultdictdictlist)
+    best_hyper_samples = {}
     for test in best_hyper:
+        best_hyper_samples[test] = {}
         for name in best_hyper[test]:
+            best_hyper_samples[test][name] = {}
             if "baselinedet" in name or "plus" in name:
                 continue  # baselinedet has no distribution, and plus has wrong parameters
             for nn in best_hyper[test][name]:  # n_normflows
-                for ihyper, hyper in enumerate(best_hyper[test][name][nn][1]):  # hypers
-                    params = getattr(hyper, name + "_best_parameters")
-                    if params is None: # best_hyper[test][name][nn][0][ihyper] == inf:
-                        continue # both test should in principal find the same error
+                best_hyper_samples[test][name][nn] = []
+                hyper = best_hyper[test][name][nn][1]
+                parameters = best_tests[test][name][nn]["best_parameters"]  # already include the results of hyper
+                for params in parameters:
+                    if params is None:  # best_hyper[test][name][nn][0][ihyper] == inf:
+                        continue  # both test should in principal find the same error
                         # this means, the best solution with parameters was still infinite, we have to skip it
                     if model_module_id == "toy":
                         model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
@@ -253,7 +307,9 @@ def load_test_results(datasetname):
     return results_dict
 
 
-def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=20):
+# TODO include percent into evaluation
+def compute_test_results(best_hyper, data_gen, model_module_id="toy", same_init_params=True, n_trials=20,
+                         include_best_hyper=False): # False because there was a bug in saving the number of epochs
     """
 
     Parameters
@@ -270,43 +326,58 @@ def compute_test_results(best_hyper, data_gen, model_module_id="toy", n_trials=2
     -------
 
     """
+    if include_best_hyper:
+        n_trials -= 1  # best_hyper is regarded as first trial
     try:
         os.mkdir(os.path.join(__path__, "eval_test"))
     except OSError:
         pass
-    ex_hyper = best_hyper["best_val_loss"]["baseline"][1][1][0] # the very first baseline nnormflows=1 hyper
+    ex_hyper = best_hyper["best_val_loss"]["baseline"][1][1] # baseline nnormflows=1 hyper
     save_fn = "%s.pkl" % (ex_hyper.datasetname if hasattr(ex_hyper, "datasetname") else "toy%id"%ex_hyper.dim)
     save_path = os.path.join(__path__, "eval_test", save_fn)
     model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
-    best_tests = defaultdict(defaultdictdicttuplelist)
+    best_tests = {}  # defaultdict(defaultdictdicttuplelist)
     for test in best_hyper:
+        best_tests[test] = {}
         for name in best_hyper[test]:
+            best_tests[test][name] = {}
             print(name)
             if name == "baselinedet":
                 optimization_type = "ml"
             else:
                 optimization_type = "annealing"
             for nn in best_hyper[test][name]:  # n_normflows
-                for hyper in best_hyper[test][name][nn][1]:  # one because 0 refers to the performance value
+                best_tests[test][name][nn] = {}
+                # very_best_hyper
+                hyper = best_hyper[test][name][nn][1] # zero refers to the performance value, one to hypers
+                # for hyper in best_hyper[test][name][nn][1]:
+                if include_best_hyper:
+                    test_results = [(getattr(hyper, name + "_test_error_rate"),
+                                     getattr(hyper, name + "_best_test_loss"),
+                                     getattr(hyper, name + "_best_epoch"),
+                                     getattr(hyper, name + "_best_parameters"))]
+                else:
                     test_results = []
-                    for _ in xrange(n_trials):
-                        data, error_func = data_gen(hyper)
+                for _ in xrange(n_trials):
+                    data, error_func = data_gen(hyper)
+                    if same_init_params:
                         init_params = getattr(hyper, name + "_init_params")
-                        if model_module_id == "toy":
-                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
-                        else:
-                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
-                        test_results.append(experiment_util.test(
-                            data, hyper, model, loss, flat, error_func, optimization_type, init_params
-                        ))
-                    test_error_rate, best_test_loss, best_epoch, best_params = zip(*test_results)
-                    best_tests[test][name][nn][0].append(np.array(test_error_rate))
-                    best_tests[test][name][nn][1].append(np.array(best_test_loss))
-                    best_tests[test][name][nn][2].append(np.array(best_epoch))
-                    best_tests[test][name][nn][3].append(np.array(best_params))
-                    with open(save_path, "wb") as f:
-                        pickle.dump(best_tests, f, -1)
-
+                    else:
+                        init_params = None
+                    if model_module_id == "toy":
+                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                    else:
+                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
+                    test_results.append(experiment_util.test(
+                        data, hyper, model, loss, flat, error_func, optimization_type, init_params
+                    ))
+                test_error_rate, best_test_loss, best_epoch, best_params = zip(*test_results)
+                best_tests[test][name][nn]['test_error_rate'] = np.array(test_error_rate)
+                best_tests[test][name][nn]['best_test_loss'] = np.array(best_test_loss)
+                best_tests[test][name][nn]['best_epoch'] = np.array(best_epoch)
+                best_tests[test][name][nn]['best_parameters'] = best_params  # leave this as a list
+                with open(save_path, "wb") as f:
+                    pickle.dump(best_tests, f, -1)
     return best_tests
 
 # Modes
