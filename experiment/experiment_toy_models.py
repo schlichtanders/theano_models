@@ -28,7 +28,7 @@ __parent__ = os.path.dirname(__path__)
 
 def toy_likelihood(dim=1):
     x = tm.as_tensor_variable([0.0]*dim)  #T.vector()
-    y = x[0] + 0.3 * T.sin(2*np.pi*(x[0]-0.5))
+    y = x[0] + 0.3 * T.sin(2*np.pi*(x[0]-0.5))  # 0.6
     if dim == 2:
         y += x[1]
     func = tm.Model(inputs=[x], outputs=y, name="sin")
