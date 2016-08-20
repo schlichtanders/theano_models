@@ -162,6 +162,7 @@ else:
         for ip, params in enumerate(good_parameters):
             print "parameterset %i" % ip
             print "----------------------------------------------"
+            sql_session = Session()
             for percent in [0.25, 0.5, 1]:
                 print "percentage of data %.2f" % percent
                 print "- - - - - -  - - - - -  - - - -  - - -  - - - "
