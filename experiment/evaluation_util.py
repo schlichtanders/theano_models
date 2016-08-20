@@ -268,6 +268,8 @@ def get_best_hyper(folders, Hyper, model_prefixes, percentages=(0.25, 0.5, 1.0),
             def key(h):
                 if getattr(h, prefix + "_best_parameters") is None:
                     return inf
+                if getattr(h, attr) == -inf:
+                    return inf
                 return getattr(h, attr)
             for percent in percentages:
                 best_hyper[suffix][prefix][percent] = {}
