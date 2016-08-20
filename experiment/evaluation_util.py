@@ -199,10 +199,16 @@ def gen_subfiles(*directories, **kwargs):
 # ------------------------
 
 def fmap_results(f, results, inplace=False):
-    new = results if inplace else defaultdict(defaultdictdictdict)
+    new = results if inplace else {} #defaultdict(defaultdictdictdict)
     for test in results:
+        if not inplace:
+            new[test] = {}
         for name in results[test]:
+            if not inplace:
+                new[test][name] = {}
             for percent in results[test][name]:
+                if not inplace:
+                    new[test][name][percent] = {}
                 for nn in results[test][name][percent]:
                     new[test][name][percent][nn] = f(results[test][name][percent][nn])
     return new

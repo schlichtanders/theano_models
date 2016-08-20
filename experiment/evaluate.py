@@ -2,7 +2,7 @@ from __future__ import division
 from ast import literal_eval
 
 from sklearn import cross_validation
-
+from pprint import pprint
 
 import os, platform, sys
 import warnings
@@ -117,6 +117,9 @@ model_prefixes = model_names.keys()
 best_hyper = eva.get_best_hyper(["withpercent"], Hyper, model_prefixes,
                                 test_suffix=["best_val_loss"], key=lambda fn, p: datasetname in fn)
 
+print "---------------------------------------------------------"
+pprint(eva.fmap_results(lambda r: r[0], best_hyper))  # To see validation performance and whether it makes sense to sample these
+print "---------------------------------------------------------"
 # both methods are saving there results, also intermediately
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 test_results = eva.compute_test_results(best_hyper, data_gen,
