@@ -765,6 +765,8 @@ def test(data, hyper, model, loss, parameters, error_func, optimization_type, in
     tm.reduce_all_identities()
 
     n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+    if n_batches <= 0:
+        n_batches = 1  # if less data is available than batchsize demands, just cycle and reuse samples for now (TODO this demands another kind of averaging... but the difference is very small)
     if X is None:
         climin_args = izip(imap(lambda x: (x,), chunk(hyper.batch_size, cycle(Z))), repeat({}))
     else:
