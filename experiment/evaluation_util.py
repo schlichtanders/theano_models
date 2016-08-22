@@ -364,7 +364,7 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
     except IOError:
         best_tests = {}
     for test in best_hyper:
-        if test not in test:
+        if test not in best_tests:
             best_tests[test] = {}
         for name in best_hyper[test]:
             if name not in best_tests[name]:
