@@ -387,7 +387,7 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
                         else:
                             test_results = []
                         for _ in xrange(n_trials):
-                            extra_dict = {k: v for k,v in hyper.__dict___.iteritems() if k[:4] not in ["base", "plan", "radi", "mixt"]}
+                            extra_dict = {k: v for k,v in hyper.__dict__.iteritems() if k[:4] not in ["base", "plan", "radi", "mixt"]}
                             with experiment_util.log_exceptions(filepath + "errors.txt", "%s,%s,%s"%(name, percent, nn), extra_dict):
                                 data, error_func = data_gen(hyper)
                                 if same_init_params:
