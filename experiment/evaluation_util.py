@@ -28,6 +28,7 @@ import experiment_util
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myobjects import Namespace
 
+import experiment_util
 import numpy as np
 import theano
 
@@ -366,7 +367,7 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
         if test not in test:
             best_tests[test] = {}
         for name in best_hyper[test]:
-            if name not in best_tests[name]
+            if name not in best_tests[name]:
                 best_tests[test][name] = {}
             print(name)
             for percent in best_hyper[test][name]:
@@ -386,15 +387,17 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
                         else:
                             test_results = []
                         for _ in xrange(n_trials):
-                            data, error_func = data_gen(hyper)
-                            if same_init_params:
-                                init_params = getattr(hyper, name + "_init_params")
-                            else:
-                                init_params = None
-                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *extra_model_args)
-                            test_results.append(experiment_util.test(
-                                data, hyper, model, loss, flat, error_func, optimization_type[name], init_params
-                            ))
+                            extra_dict = {k: v for k,v in hyper.__dict___.iteritems() if k[:4] not in ["base", "plan", "radi", "mixt"]}
+                            with experiment_util.log_exceptions(filepath + "errors.txt", "%s,%s,%s"%(name, percent, nn), extra_dict):
+                                data, error_func = data_gen(hyper)
+                                if same_init_params:
+                                    init_params = getattr(hyper, name + "_init_params")
+                                else:
+                                    init_params = None
+                                model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *extra_model_args)
+                                test_results.append(experiment_util.test(
+                                    data, hyper, model, loss, flat, error_func, optimization_type[name], init_params
+                                ))
                         test_error_rate, best_test_loss, best_epoch, best_params = zip(*test_results)
                         best_tests[test][name][percent][nn]['test_error_rate'] = np.array(test_error_rate)
                         best_tests[test][name][percent][nn]['best_test_loss'] = np.array(best_test_loss)
