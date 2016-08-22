@@ -367,7 +367,7 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
         if test not in best_tests:
             best_tests[test] = {}
         for name in best_hyper[test]:
-            if name not in best_tests[name]:
+            if name not in best_tests[test]:
                 best_tests[test][name] = {}
             print(name)
             for percent in best_hyper[test][name]:
