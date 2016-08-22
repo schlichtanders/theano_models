@@ -285,31 +285,38 @@ def get_best_hyper(folders, Hyper, model_prefixes, percentages=(0.25, 0.5, 1.0),
 
 def sample_best_hyper(best_hyper, best_tests, filepath, model_module_id="toy", n_samples=1000):
     model_module = experiment_toy_models if model_module_id == "toy" else experiment_models
-    best_hyper_samples = {}
+    try:
+        best_hyper_samples = load_dict(filepath)
+    except IOError:
+        best_hyper_samples = {}
     for test in best_hyper:
-        best_hyper_samples[test] = {}
+        if test not in best_hyper_samples:
+            best_hyper_samples[test] = {}
         for name in best_hyper[test]:
-            best_hyper_samples[test][name] = {}
+            if name not in best_hyper_samples[test]:
+                best_hyper_samples[test][name] = {}
             if "baselinedet" in name or "plus" in name:
                 continue  # baselinedet has no distribution, and plus has wrong parameters
             for percent in best_hyper[test][name]:
-                best_hyper_samples[test][name][percent] = {}
+                if percent not in best_hyper_samples[test][name][percent]:
+                    best_hyper_samples[test][name][percent] = {}
                 for nn in best_hyper[test][name][percent]:  # n_normflows
-                    best_hyper_samples[test][name][percent][nn] = []
-                    hyper = best_hyper[test][name][percent][nn][1]
-                    parameters = best_tests[test][name][percent][nn]["best_parameters"]  # already include the results of hyper
-                    for params in parameters:
-                        if params is None:  # best_hyper[test][name][nn][0][ihyper] == inf:
-                            continue  # both test should in principal find the same error
-                            # this means, the best solution with parameters was still infinite, we have to skip it
-                        if model_module_id == "toy":
-                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
-                        else:
-                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
-                        sampler = theano.function([], approx_posterior['outputs'], givens={flat: params})  # reduces amount of runtime
-                        best_hyper_samples[test][name][percent][nn].append( np.array([sampler() for _ in xrange(n_samples)]) )
-                    with open(filepath, "wb") as f:
-                        pickle.dump(best_hyper_samples, f, -1)
+                    if nn not in best_hyper_samples[test][name][percent]: # otherwise it was computed already
+                        best_hyper_samples[test][name][percent][nn] = []
+                        hyper = best_hyper[test][name][percent][nn][1]
+                        parameters = best_tests[test][name][percent][nn]["best_parameters"]  # already include the results of hyper
+                        for params in parameters:
+                            if params is None:  # best_hyper[test][name][nn][0][ihyper] == inf:
+                                continue  # both test should in principal find the same error
+                                # this means, the best solution with parameters was still infinite, we have to skip it
+                            if model_module_id == "toy":
+                                model, loss, flat, approx_posterior = getattr(model_module, name)(hyper)
+                            else:
+                                model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *model_module_id)
+                            sampler = theano.function([], approx_posterior['outputs'], givens={flat: params})  # reduces amount of runtime
+                            best_hyper_samples[test][name][percent][nn].append( np.array([sampler() for _ in xrange(n_samples)]) )
+                        with open(filepath, "wb") as f:
+                            pickle.dump(best_hyper_samples, f, -1)
     return best_hyper_samples
 
 # Test error
@@ -350,43 +357,51 @@ def compute_test_results(best_hyper, data_gen, optimization_type, filepath, extr
     if include_best_hyper:
         n_trials -= 1  # best_hyper is regarded as first trial
     model_module = experiment_models if extra_model_args else experiment_toy_models  # toy model does not need extra args
-    best_tests = {}  # defaultdict(defaultdictdicttuplelist)
+
+    try:
+        best_tests = load_dict(filepath)
+    except IOError:
+        best_tests = {}
     for test in best_hyper:
-        best_tests[test] = {}
+        if test not in test:
+            best_tests[test] = {}
         for name in best_hyper[test]:
-            best_tests[test][name] = {}
+            if name not in best_tests[name]
+                best_tests[test][name] = {}
             print(name)
             for percent in best_hyper[test][name]:
-                best_tests[test][name][percent] = {}
+                if percent not in best_tests[test][name]:
+                    best_tests[test][name][percent] = {}
                 for nn in best_hyper[test][name][percent]:  # n_normflows
-                    best_tests[test][name][percent][nn] = {}
-                    # very_best_hyper
-                    hyper = best_hyper[test][name][percent][nn][1] # zero refers to the performance value, one to hypers
-                    # for hyper in best_hyper[test][name][nn][1]:
-                    if include_best_hyper:
-                        test_results = [(getattr(hyper, name + "_test_error_rate"),
-                                         getattr(hyper, name + "_best_test_loss"),
-                                         getattr(hyper, name + "_best_epoch"),
-                                         getattr(hyper, name + "_best_parameters"))]
-                    else:
-                        test_results = []
-                    for _ in xrange(n_trials):
-                        data, error_func = data_gen(hyper)
-                        if same_init_params:
-                            init_params = getattr(hyper, name + "_init_params")
+                    if nn not in best_tests[test][name][percent]:
+                        best_tests[test][name][percent][nn] = {}
+                        # very_best_hyper
+                        hyper = best_hyper[test][name][percent][nn][1] # zero refers to the performance value, one to hypers
+                        # for hyper in best_hyper[test][name][nn][1]:
+                        if include_best_hyper:
+                            test_results = [(getattr(hyper, name + "_test_error_rate"),
+                                             getattr(hyper, name + "_best_test_loss"),
+                                             getattr(hyper, name + "_best_epoch"),
+                                             getattr(hyper, name + "_best_parameters"))]
                         else:
-                            init_params = None
-                        model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *extra_model_args)
-                        test_results.append(experiment_util.test(
-                            data, hyper, model, loss, flat, error_func, optimization_type[name], init_params
-                        ))
-                    test_error_rate, best_test_loss, best_epoch, best_params = zip(*test_results)
-                    best_tests[test][name][percent][nn]['test_error_rate'] = np.array(test_error_rate)
-                    best_tests[test][name][percent][nn]['best_test_loss'] = np.array(best_test_loss)
-                    best_tests[test][name][percent][nn]['best_epoch'] = np.array(best_epoch)
-                    best_tests[test][name][percent][nn]['best_parameters'] = best_params  # leave this as a list
-                    with open(filepath, "wb") as f:
-                        pickle.dump(best_tests, f, -1)
+                            test_results = []
+                        for _ in xrange(n_trials):
+                            data, error_func = data_gen(hyper)
+                            if same_init_params:
+                                init_params = getattr(hyper, name + "_init_params")
+                            else:
+                                init_params = None
+                            model, loss, flat, approx_posterior = getattr(model_module, name)(hyper, *extra_model_args)
+                            test_results.append(experiment_util.test(
+                                data, hyper, model, loss, flat, error_func, optimization_type[name], init_params
+                            ))
+                        test_error_rate, best_test_loss, best_epoch, best_params = zip(*test_results)
+                        best_tests[test][name][percent][nn]['test_error_rate'] = np.array(test_error_rate)
+                        best_tests[test][name][percent][nn]['best_test_loss'] = np.array(best_test_loss)
+                        best_tests[test][name][percent][nn]['best_epoch'] = np.array(best_epoch)
+                        best_tests[test][name][percent][nn]['best_parameters'] = best_params  # leave this as a list
+                        with open(filepath, "wb") as f:
+                            pickle.dump(best_tests, f, -1)
     return best_tests
 
 # Modes
