@@ -9,3 +9,7 @@
 data/year
 *.egg-info
 */tmp/
+*.db
+*errors.txt
+*.zip
+*/.directory
