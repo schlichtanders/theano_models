@@ -115,7 +115,7 @@ print "datasetname", datasetname
 
 model_prefixes = model_names.keys()
 best_hyper = eva.get_best_hyper(["withpercent"], Hyper, model_prefixes,
-                                test_suffix=["best_val_loss"], key=lambda fn, p: datasetname in fn)
+                                test_suffix=["best_val_loss"], key_files=lambda fn, p: datasetname in fn)
 
 print "---------------------------------------------------------"
 pprint(eva.fmap_results(lambda r: r[0], best_hyper))  # To see validation performance and whether it makes sense to sample these

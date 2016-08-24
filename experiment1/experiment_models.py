@@ -115,7 +115,9 @@ def baseline(hyper, example_input, example_output, output_transfer="identity"):
 
     _total_size = tm.total_size(targets['to_be_randomized'])
     params = pm.DiagGauss(output_size=_total_size)
-    prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
+    # prior = tm.fix_params(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)))
+    prior = tm.Merge(pm.Gauss(output_shape=(_total_size,), init_var=np.exp(-2 * hyper.minus_log_s1)),
+                     parameters=None)  # TODO further make adaptive prior!!
     model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
     loss = tm.loss_variational(model)
 

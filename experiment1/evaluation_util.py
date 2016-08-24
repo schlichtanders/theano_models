@@ -230,6 +230,7 @@ def to_pandas_dict(datasetname, best_hyper, pandas_dict=None, last_layer_to_dict
             'test_measures': [],
             'model': [],
             'n_normflows': [],
+            'percent': []
         })
     if last_layer_to_dict is None:
         def last_layer_to_dict(last_layer):
@@ -237,22 +238,26 @@ def to_pandas_dict(datasetname, best_hyper, pandas_dict=None, last_layer_to_dict
 
     for test in best_hyper:
         for name in best_hyper[test]:
-            for nn in best_hyper[test][name]:
-                pandas_dict['datasetname'].append(datasetname)
-                pandas_dict['test_measures'].append(test)
-                pandas_dict['model'].append(name)
-                pandas_dict['n_normflows'].append(nn)
-                pandas_dict.update()
-                for k, v in last_layer_to_dict(best_hyper[test][name][nn]).iteritems():
-                    pandas_dict[k].append(v)
-#                 for i, v in enumerate(best_hyper[test][name][nn][0]):
-#                     vn = "value%i" % i
-#                     pandas_dict[vn].append(v)
+            for percent in best_hyper[test][name]:
+                for nn in best_hyper[test][name][percent]:
+                    pandas_dict['datasetname'].append(datasetname)
+                    pandas_dict['test_measures'].append(test)
+                    pandas_dict['model'].append(name)
+                    pandas_dict['percent'].append(percent)
+                    pandas_dict['n_normflows'].append(nn)
+                    pandas_dict.update()
+                    for k, v in last_layer_to_dict(best_hyper[test][name][percent][nn], name=name, test=test, percent=percent, nn=nn).iteritems():
+                        pandas_dict[k].append(v)
+    #                 for i, v in enumerate(best_hyper[test][name][nn][0]):
+    #                     vn = "value%i" % i
+    #                     pandas_dict[vn].append(v)
     return pandas_dict
 
 # -------------------------------
 
-def get_best_hyper(folders, Hyper, model_prefixes, percentages=(0.25, 0.5, 1.0), test_suffix=("best_val_loss", "val_error_rate"), key=lambda fn, path:True):
+def get_best_hyper(folders, Hyper, model_prefixes=('baselinedet', 'baselinedetplus', 'baselineplus', 'baseline', 'mixture', 'planarflow',
+                                                   'planarflowdet', 'radialflow', 'radialflowdet'),
+                   percentages=(0.25, 0.5, 1.0), test_suffix=("best_val_loss", "val_error_rate"), key=lambda fn, path:True):
     all_data = []
     for f in gen_subfiles(*folders, key=key): #"toy_windows", "toy_linux"):
         engine = create_engine('sqlite:///' + f)
@@ -278,9 +283,12 @@ def get_best_hyper(folders, Hyper, model_prefixes, percentages=(0.25, 0.5, 1.0),
                     attr = prefix + "_" + suffix
                     # find best fit
                     all_data_nn = [h for h in all_data if h.n_normflows == nn and h.percent == percent]
-                    hyper = heapq.nsmallest(1, all_data_nn, key=key)[0]  # only the very best is wanted to keep it simple and clean
-                    value = getattr(hyper, attr) #map(op.attrgetter(attr), entries)
-                    best_hyper[suffix][prefix][percent][nn] = value, hyper
+                    if all_data_nn:
+                        hyper = heapq.nsmallest(1, all_data_nn, key=key)[0]  # only the very best is wanted to keep it simple and clean
+                        value = getattr(hyper, attr) #map(op.attrgetter(attr), entries)
+                        best_hyper[suffix][prefix][percent][nn] = value, hyper
+                    else:
+                        best_hyper[suffix][prefix][percent][nn] = None, None
     return best_hyper
 
 
@@ -299,7 +307,7 @@ def sample_best_hyper(best_hyper, best_tests, filepath, model_module_id="toy", n
             if "baselinedet" in name or "plus" in name:
                 continue  # baselinedet has no distribution, and plus has wrong parameters
             for percent in best_hyper[test][name]:
-                if percent not in best_hyper_samples[test][name][percent]:
+                if percent not in best_hyper_samples[test][name]:
                     best_hyper_samples[test][name][percent] = {}
                 for nn in best_hyper[test][name][percent]:  # n_normflows
                     if nn not in best_hyper_samples[test][name][percent]: # otherwise it was computed already

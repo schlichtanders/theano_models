@@ -424,7 +424,7 @@ def get_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
 
 
 
-def get_semiold_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
+def get_toy_semiold_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
                                       'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
 
     model_prefixes = map(fix_prefix, model_prefixes)
@@ -460,7 +460,7 @@ def get_semiold_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
 {0}train_loss = Column(PickleType)
 {0}val_loss = Column(PickleType)
 {0}epochs = Column(Integer)
-{0}init_params = Column(PickleType, nullable=True)
+{0}init_param = Column(PickleType, nullable=True)
 {0}val_error_rate = Column(Float)
 {0}test_error_rate = Column(Float)""".format(_prefix))
 
@@ -494,8 +494,8 @@ def get_semiold_toy_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
         def __repr__(self):
             return "hyper %i" % hash(self)
 
-
     return Hyper
+
 
 def get_toy_old_hyper(model_prefixes=('baselinedet', 'baseline', 'mixture',
                                       'planarflow', 'planarflowdet', 'radialflow', 'radialflowdet')):
@@ -623,8 +623,10 @@ def hyper_init_mnist(hyper):
 # OPTIMIZATION
 # ============
 
+
 def optimize(prefix, data, hyper, model, loss, parameters, error_func, optimization_type):
     X, Z, VX, VZ, TX, TZ = data[:6]
+
     print prefix
     if prefix and not prefix.endswith("_"):  # source of bugs
         prefix += "_"

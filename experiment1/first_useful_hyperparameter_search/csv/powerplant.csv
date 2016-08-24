@@ -1,0 +1,2 @@
+minus_log_s,batch_size,n_normflows,opt_identifier,opt_momentum,opt_offset,opt_decay,opt_step_rate
+1,100,1,adam,0.0018480682710029317,0.000753448449040843,0.7868328181455347,0.01

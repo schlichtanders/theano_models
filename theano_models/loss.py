@@ -14,7 +14,7 @@ from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.mylists import as_list, deflatten
 from theano import gof
 from schlichtanders.mydicts import PassThroughDict, DefaultDict, update
-from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp, AverageExp, lift
+from schlichtanders.myfunctools import fmap, sumexpmap, convert, meanexpmap, sumexp, AverageExp, lift, fmap_singleton
 from util import list_random_sources
 
 from base import Model, Merge, outputting_references
@@ -233,12 +233,13 @@ def numericalize(loss, parameters,
         #                   "as the latter is reset to ``True`` (was False)")
         batch_precompile = False  # TODO add precompile = True version
         batch_common_rng = False  # for precompile = True this is needed, otherwise averaging wouldn't make sense
-    elif batch_common_rng:
-        # precompile of there is something to map, and if same random numbers shall be used in every sample
-        if not batch_precompile:
-            warnings.warn("``batch_common_rng=True`` and ``batch_mapreduce`` require ``batch_precompile=True``,"
-                          "as the latter is reset to ``True`` (was False)")
-        batch_precompile = True
+    # # as batch_common_rng = True by default, we cannot overwrite batch_precompile to True by this default value
+    # elif batch_common_rng:
+    #     # precompile of there is something to map, and if same random numbers shall be used in every sample
+    #     if not batch_precompile:
+    #         warnings.warn("``batch_common_rng=True`` and ``batch_common_rng`` require ``batch_precompile=True``,"
+    #                       "as the latter is reset to ``True`` (was False)")
+    #     batch_precompile = True
 
     theano_function_kwargs['on_unused_input'] = "ignore"
     theano_function_kwargs['allow_input_downcast'] = True
@@ -258,7 +259,7 @@ def numericalize(loss, parameters,
     def _numericalize(key_degree, key_loss):
         """ compiles function with signature f(num_params, *loss_inputs) """
         output = derivatives[key_degree](key_loss)
-        if batch_precompile:
+        if batch_precompile == True:
             print "batch_precompile"
             # further the subgraph ``sub`` is computed
             # it includes everything needed for separating parameters from outputs
@@ -291,6 +292,14 @@ def numericalize(loss, parameters,
                 return batch_mapreduce(h, *loss_inputs)
             f.wrapped = fparam, foutput
 
+        elif batch_precompile == "singleton":
+            # exponential part missing
+            _f = theano_function([parameters] + loss['inputs'], output)
+            def f(num_params, *loss_inputs):
+                def h(*inner_loss_inputs):
+                    return _f(num_params, *inner_loss_inputs)
+                return fmap_singleton(h, *loss_inputs)
+            f.wrapped = _f
         else:
             if exp_average_n > 1:
                 if key_degree == "num_loss":
