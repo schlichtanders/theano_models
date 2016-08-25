@@ -155,7 +155,7 @@ for ir in itertools.count():  # repeat the set
         #     new_length = int(len(original_X) * percent)
         #     X = original_X[:new_length]
         #     Z = original_Z[:new_length]
-        for nn in [2, 5, 10, 30] if "toy" in datasetname else [10, 30]:
+        for nn in [2, 5, 10, 25] if "toy" in datasetname else [10, 25]:  # 30 is too much for windows theano
             print "n_normflows %i" % nn
             print ".............................................."
             for ia in xrange(1):  # there is a lot randomness involved here
