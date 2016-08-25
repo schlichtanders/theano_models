@@ -26,8 +26,9 @@ from copy import copy
 import warnings
 
 from experiment_util import log_exceptions, hyper_init_dict, get_init_random, \
-    optimize, load_and_preprocess_data, get_init_several, get_init_mnist, Hyper, get_init_data
+    optimize, load_and_preprocess_data, get_init_several, get_init_mnist, get_hyper, get_init_data, get_init_toy
 import experiment_models
+import experiment_toy_models
 
 inf = float("inf")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -59,7 +60,7 @@ csvpath = os.path.join(__path__, 'good_parameters_betteraspbp.csv')
 
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
-
+module_models = experiment_toy_models if "toy" in datasetname else experiment_models
 # # Data
 #     # datasetnames = ["boston", "concrete", "energy", "kin8nm", "naval", "powerplant", "protein", "winered", "yacht", "year"]
 #     datasetnames = ["boston", "concrete", "energy", "kin8nm", "powerplant", "winered", "yacht"]
@@ -77,13 +78,18 @@ model_names = { # sorted by optimization type
 
 # Hyperparameters
 # ===============
-
+Hyper = get_hyper()
 engine = create_engine('sqlite:///' + filepath)  # os.path.join(__path__, foldername, '%s.db' % filename)
 Hyper.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 sql_session = Session()
 
-get_init_dataset = get_init_mnist if datasetname == "mnist" else get_init_several
+if "toy" in datasetname:
+    get_init_dataset = get_init_toy
+elif datasetname == "mnist":
+    get_init_dataset = get_init_mnist
+else:
+    get_init_dataset = get_init_several
 
 
 # Data
@@ -92,9 +98,6 @@ data, error_func = load_and_preprocess_data(datasetname)
 X, Z, VX, VZ, TX, TZ = data
 original_X = X
 original_Z = Z
-example_input = X[0]
-example_output = Z[0]
-output_transfer = "softmax" if datasetname=="mnist" else "identity"
 
 # TODO the above randomly splits the dataset, which should be averaged out ideally... however with same initial parameters... that makes it difficult
 
@@ -113,7 +116,7 @@ def optimize_all(sql_session, hyper_dict):
                 hyper_init_dict(hyper, hyper_dict)
                 sql_session.add(hyper)
 
-                model, approx_posterior = getattr(experiment_models, modelname)(hyper)
+                model, approx_posterior = getattr(module_models, modelname)(hyper)
                 optimize(  # updates hyper inplace with results
                     data=data, hyper=hyper, model=model, error_func=error_func
                 )
@@ -146,7 +149,7 @@ for ir in itertools.count():  # repeat the set
         print "----------------------------------------------"
         params = {k: params[k] for k in good_parameters_keys}  # take only needed parameter keys and ignore the rest
         update(params, get_init_random(), overwrite=False)
-        update(params, get_init_dataset(), overwrite=True)
+        update(params, get_init_dataset(datasetname), overwrite=True)
         update(params, get_init_data(data), overwrite=True)
 
         # for percent in [0.5, 1]:
@@ -163,6 +166,6 @@ for ir in itertools.count():  # repeat the set
                 print ". . . . . . . . . . . . . . . . . . . . . ."
                 params['n_normflows'] = nn
                 params['percent'] = percent
-                if datasetname != "mnist":  # we need the n_normflow parameter for this to be valid
+                if datasetname not in ["mnist", "toy1d", "toy2d"]:  # we need the n_normflow parameter for this to be valid
                     params['units_per_layer_plus'] = params['units_per_layer'] + params['units_per_layer'] * (params['n_normflows'] * 2)
                 optimize_all(Session(), params)

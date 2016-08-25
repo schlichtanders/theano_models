@@ -9,7 +9,6 @@ import theano_models as tm
 import theano_models.deterministic_models as dm
 import theano_models.probabilistic_models as pm
 import warnings
-from experiment_util import track
 
 inf = float("inf")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -26,12 +25,12 @@ __parent__ = os.path.dirname(__path__)
 # HELPERS
 # =======
 
-def toy_likelihood(dim=1):
-    x = tm.as_tensor_variable([0.0]*dim)  #T.vector()
-    y = x[0] + 0.6 * T.sin(2*np.pi*(x[0]-0.5))
+def toy_likelihood(dim=1, w_true=0.0):
+    w = tm.as_tensor_variable([w_true]*dim)  #T.vector()
+    y = w[0] + 0.6 * T.sin(2*np.pi*(w[0]-0.5))
     if dim == 2:
-        y += x[1]
-    func = tm.Model(inputs=[x], outputs=y, name="sin")
+        y += w[1]
+    func = tm.Model(inputs=[w], outputs=y, name="sin")
     return tm.Merge(pm.GaussianNoise(y, init_var=0.07), func, ignore_references={'parameters', 'parameters_positive'}) # 0.07 is well suited for 1-dim problem
 
 # capital, as these construct models
@@ -44,13 +43,11 @@ Flat = tm.as_proxmodel("to_be_randomized")(tm.prox_flatten)
 # =========
 
 def baselinedet(hyper):
-    dim = len(hyper.example_input)  # real values
-    model = tm.Merge(toy_likelihood(dim), inputs="parameters")
+    model = tm.Merge(toy_likelihood(hyper.dim), inputs="parameters")
     return model, None
 
 def baseline(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
+    targets = toy_likelihood(hyper.dim)
     total_size = tm.total_size(targets['inputs'])
     params = pm.DiagGauss(output_size=total_size)
     prior = tm.fix_params(pm.DiagGauss(output_size=total_size))  # gives init_var = 1
@@ -62,8 +59,7 @@ def baseline(hyper):
 # ===========
 
 def planarflow(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
+    targets = toy_likelihood(hyper.dim)
     total_size = tm.total_size(targets['inputs'])
     params_base = pm.DiagGauss(output_size=total_size)
     normflows = [dm.PlanarTransform() for _ in range(hyper.n_normflows)]
@@ -78,9 +74,7 @@ def planarflow(hyper):
 
 
 def planarflowdet(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
-
+    targets = toy_likelihood(hyper.dim)
     target_normflow = tm.Merge(dm.PlanarTransform(), inputs="to_be_randomized") # rename inputs is crucial!!
     for _ in range(hyper.n_normflows - 1):
         target_normflow = tm.Merge(dm.PlanarTransform(target_normflow), target_normflow)
@@ -92,7 +86,6 @@ def planarflowdet(hyper):
 
     params = pm.DiagGauss(output_size=total_size)
     prior = tm.fix_params(pm.DiagGauss(output_size=total_size))
-
     model = tm.variational_bayes(targets, 'to_be_randomized', params, priors=prior)
     return model, target_normflow
 
@@ -101,9 +94,7 @@ def planarflowdet(hyper):
 # ===========
 
 def radialflow(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
-
+    targets = toy_likelihood(hyper.dim)
     total_size = tm.total_size(targets['inputs'])
     params_base = pm.DiagGauss(output_size=total_size)
     normflows = [dm.RadialTransform() for _ in range(hyper.n_normflows)] # *2 as radial flow needs only half of the parameters
@@ -114,13 +105,11 @@ def radialflow(hyper):
 
     prior = tm.fix_params(pm.DiagGauss(output_size=total_size))
     model = tm.variational_bayes(targets, 'inputs', params, priors=prior)
-    loss = tm.loss_variational(model)
     return model, params
 
 
 def radialflowdet(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
+    targets = toy_likelihood(hyper.dim)
 
     target_normflow = tm.Merge(dm.RadialTransform(), inputs="to_be_randomized")  # rename inputs is crucial!!
     for _ in range(hyper.n_normflows - 1): # *2 as radial flow needs only half of the parameters
@@ -141,8 +130,7 @@ def radialflowdet(hyper):
 # ========
 
 def mixture(hyper):
-    dim = len(hyper.example_input)
-    targets = toy_likelihood(dim)
+    targets = toy_likelihood(hyper.dim)
     # the number of parameters comparing normflows and mixture of gaussians match perfectly (the only exception is
     # that we spend an additional parameter when modelling n psumto1 with n parameters instead of (n-1) within softmax
     total_size = tm.total_size(targets['inputs'])

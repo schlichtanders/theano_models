@@ -273,6 +273,18 @@ def version_fix(best, prefix):
         pass
     return best
 
+
+def get_key_hyper(attr):
+    def key_hyper(h):
+        if h.best_parameters is None:
+            return inf
+        val = getattr(h, attr)
+        if val == -inf:
+            return inf
+        return val
+    return key_hyper
+
+
 def get_single_best_hyper(folders, modelname, Hypers=None, attr="best_val_loss", key_files=lambda fn, path:True, filter_hyper=lambda h: True):
     all_data = []
     for f in gen_subfiles(*folders, key=key_files):
@@ -283,33 +295,19 @@ def get_single_best_hyper(folders, modelname, Hypers=None, attr="best_val_loss",
             Hyper = Base.classes.hyper
 
             session = Session(engine)
-            all_data += filter(filter_hyper, session.query(Hyper))
+            all_data += [version_fix(copy(h), modelname) for h in session.query(Hyper) if filter_hyper(h)]
         else:
             for _Hyper in Hypers:
                 try:
                     _Hyper.metadata.create_all(engine)
                     Hyper = _Hyper
                     session = Session(engine)
-                    all_data += filter(filter_hyper, session.query(Hyper))
+                    all_data += [version_fix(copy(h), modelname) for h in session.query(Hyper) if filter_hyper(h)]
                     break
                 except OperationalError:
                     continue
 
-    def mygetattr(h, attr):
-        if not hasattr(h, attr):
-            return getattr(h, modelname + "_" + attr)
-        return getattr(h, attr)
-
-    def key_hyper(h):
-        if getattr(h, modelname + "_best_parameters") is None:
-            return inf
-        val = mygetattr(h, attr)
-        if val == -inf:
-            return inf
-        return val
-
-    best = heapq.nsmallest(1, all_data, key=key_hyper)[0]
-    version_fix(best, modelname)
+    best = heapq.nsmallest(1, all_data, key=get_key_hyper(attr))[0]
     return best
 
 
@@ -337,14 +335,6 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
                 except OperationalError:
                     continue
 
-    def key_hypers(h):
-        if h.best_parameters is None:
-            return inf
-        val = getattr(h, attr)
-        if val == -inf:
-            return inf
-        return val
-
     if percentages is None:
         percentages = [None]
     if n_normflows is None:
@@ -361,12 +351,10 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
                 sub_all_data.append(version_fix(copy(h), prefix))
 
         if sub_all_data:
-            best = heapq.nsmallest(1, sub_all_data, key=key_hypers)[0]  # only the very best is wanted to keep it simple and clean
-
+            best = heapq.nsmallest(1, sub_all_data, key=get_key_hyper(attr))[0]  # only the very best is wanted to keep it simple and clean
             common_format = Namespace({k: v for k, v in best.__dict__.iteritems() if k[:3] not in ["bas", "mix", "pla", "rad"]})  # namespace ensures standard instance access
             best_hypers.append(common_format)
-        else:
-            pass  # it makes code so much simpler  # best_hypers.append((suffix, prefix, percent, nn))  # kind of None, but with information
+        # else nothing is appended
     return best_hypers  # check for duplicates (might be the case in old hyper representation)
 
 

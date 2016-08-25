@@ -38,6 +38,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from copy import copy
 import warnings
+
+import experiment_toy_models
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 inf = float("inf")
 EPS = 1e-4
@@ -89,7 +92,18 @@ def error_rate_categorical(PX, Z):
     return (PX[:, :10].argmax(1) != Z.argmax(1)).mean()
 
 def load_and_preprocess_data(datasetname):
-    if datasetname.lower() == "mnist":
+    if "toy" in datasetname:
+        dim = 1 if "1d" in datasetname else 2
+        x_true = 0.0  # 0.15
+        _x_true = np.array([x_true] * dim, dtype=theano.config.floatX)
+        sampler = experiment_toy_models.toy_likelihood(dim=dim).function()
+        Z = np.array([sampler(_x_true) for n in range(1000)], dtype=theano.config.floatX)
+        Z, TZ = cross_validation.train_test_split(Z, test_size=0.1)  # 10% test used in paper
+        Z, VZ = cross_validation.train_test_split(Z, test_size=0.1)  # 20% validation used in paper
+        data = None, Z, None, VZ, None, TZ  # None represents X data
+        return data, RMSE
+
+    elif datasetname.lower() == "mnist":
         datafile = os.path.join(__parent__, 'data', 'mnist.pkl.gz')
         with gzip.open(datafile, 'rb') as f:
             train_set, val_set, test_set = cPickle.load(f)
@@ -129,87 +143,175 @@ def load_and_preprocess_data(datasetname):
 # ==========
 Base = declarative_base()
 
-class Hyper(Base):
-    __tablename__ = "hyper"
-    id = Column(Integer, primary_key=True)
+def get_hyper():
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
 
-    # hyper parameters:
-    datasetname = Column(String)
-    modelname = Column(String)
-    optimization_type = Column(String)
-    percent = Column(Float)
-    max_epochs_without_improvement = Column(Integer)
-    logP_average_n_intermediate = Column(Integer)
-    errorrate_average_n = Column(Integer)
-    units_per_layer = Column(Integer)
-    units_per_layer_plus = Column(Integer)
-    n_layers = Column(Integer)
-    minus_log_s1 = Column(Integer)
-    minus_log_s2 = Column(Integer)
-    batch_size = Column(Integer)
-    annealing_T = Column(Integer, nullable=True)
-    adapt_prior = Column(Boolean)
+        # hyper parameters:
+        datasetname = Column(String)
+        modelname = Column(String)
+        optimization_type = Column(String)
+        dim = Column(Integer, nullable=True)
+        w_true = Column(Float, nullable=True)
+        percent = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n_intermediate = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        units_per_layer = Column(Integer)
+        units_per_layer_plus = Column(Integer)
+        n_layers = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+        annealing_T = Column(Integer, nullable=True)
+        adapt_prior = Column(Boolean)
 
-    n_normflows = Column(Integer)
+        n_normflows = Column(Integer)
 
-    opt_identifier = Column(String)
-    opt_momentum = Column(Float)
-    opt_offset = Column(Float)
-    opt_decay = Column(Float)
-    opt_step_rate = Column(Float)
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
 
-    best_parameters = Column(PickleType, nullable=True)
-    best_val_loss = Column(Float)
-    best_test_loss = Column(Float)
-    train_loss = Column(PickleType)
-    val_loss = Column(PickleType)
-    best_epoch = Column(Integer)
-    init_parameters = Column(PickleType, nullable=True)
-    best_val_error = Column(Float)
-    best_test_error = Column(Float)
+        best_parameters = Column(PickleType, nullable=True)
+        best_val_loss = Column(Float)
+        best_test_loss = Column(Float)
+        train_loss = Column(PickleType)
+        val_loss = Column(PickleType)
+        best_epoch = Column(Integer)
+        init_parameters = Column(PickleType, nullable=True)
+        best_val_error = Column(Float)
+        best_test_error = Column(Float)
 
-    example_input = Column(PickleType, nullable=True)
-    example_output = Column(PickleType, nullable=True)
-    output_transfer = Column(String, nullable=True)
+        example_input = Column(PickleType, nullable=True)
+        example_output = Column(PickleType, nullable=True)
+        output_transfer = Column(String, nullable=True)
 
-    def __init__(self, datasetname, modelname, optimization_type):
-        """
-        Parameters
-        ----------
-        datasetname : str
-        """
-        self.output_transfer = "identity"  # currently this is always the case
-        self.datasetname = datasetname
-        self.modelname = modelname
-        self.optimization_type = optimization_type
-        self.percent = 1.0
-        self.max_epochs_without_improvement = 40  # 30
-        self.logP_average_n_intermediate = 3  # TODO random.choice([1,10])
-        self.logP_average_n_final = 10
-        self.errorrate_average_n = 10
-        self.output_transfer = "identity"
-        self.annealing_T = 100  # in terms of epochs; 50 may be good
-        self.adapt_prior = False
-        self.init_parameters = None  # half result parameter, half hyperparameter, but more hyperparameter
-        self.init_results()
+        def __init__(self, datasetname, modelname, optimization_type):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.output_transfer = "identity"  # currently this is always the case
+            self.datasetname = datasetname
+            self.modelname = modelname
+            self.optimization_type = optimization_type
+            self.percent = 1.0
+            self.max_epochs_without_improvement = 40  # 30
+            self.logP_average_n_intermediate = 3  # TODO random.choice([1,10])
+            self.logP_average_n_final = 10
+            self.errorrate_average_n = 10
+            self.output_transfer = "identity"
+            self.annealing_T = 100  # in terms of epochs; 50 may be good
+            self.adapt_prior = False
+            self.init_parameters = None  # half result parameter, half hyperparameter, but more hyperparameter
+            self.dim = None
+            self.w_true = None
+            self.init_results()
 
-    def init_results(self):
-        self.best_parameters = None
-        self.best_val_loss = inf
-        self.best_test_loss = inf
-        self.train_loss = []
-        self.val_loss = []
-        self.best_epoch = 0
-        self.best_val_error = inf
-        self.best_test_error = inf
+        def init_results(self):
+            self.best_parameters = None
+            self.best_val_loss = inf
+            self.best_test_loss = inf
+            self.train_loss = []
+            self.val_loss = []
+            self.best_epoch = 0
+            self.best_val_error = inf
+            self.best_test_error = inf
 
-    def __repr__(self):
-        return "hyper %i" % hash(self)
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+
+    return Hyper
+
+def get_old_hyper():
+    class Hyper(Base):
+        __tablename__ = "hyper"
+        id = Column(Integer, primary_key=True)
+
+        # hyper parameters:
+        datasetname = Column(String)
+        modelname = Column(String)
+        optimization_type = Column(String)
+        percent = Column(Float)
+        max_epochs_without_improvement = Column(Integer)
+        logP_average_n_intermediate = Column(Integer)
+        errorrate_average_n = Column(Integer)
+        units_per_layer = Column(Integer)
+        units_per_layer_plus = Column(Integer)
+        n_layers = Column(Integer)
+        minus_log_s1 = Column(Integer)
+        minus_log_s2 = Column(Integer)
+        batch_size = Column(Integer)
+        annealing_T = Column(Integer, nullable=True)
+        adapt_prior = Column(Boolean)
+
+        n_normflows = Column(Integer)
+
+        opt_identifier = Column(String)
+        opt_momentum = Column(Float)
+        opt_offset = Column(Float)
+        opt_decay = Column(Float)
+        opt_step_rate = Column(Float)
+
+        best_parameters = Column(PickleType, nullable=True)
+        best_val_loss = Column(Float)
+        best_test_loss = Column(Float)
+        train_loss = Column(PickleType)
+        val_loss = Column(PickleType)
+        best_epoch = Column(Integer)
+        init_parameters = Column(PickleType, nullable=True)
+        best_val_error = Column(Float)
+        best_test_error = Column(Float)
+
+        example_input = Column(PickleType, nullable=True)
+        example_output = Column(PickleType, nullable=True)
+        output_transfer = Column(String, nullable=True)
+
+        def __init__(self, datasetname, modelname, optimization_type):
+            """
+            Parameters
+            ----------
+            datasetname : str
+            """
+            self.output_transfer = "identity"  # currently this is always the case
+            self.datasetname = datasetname
+            self.modelname = modelname
+            self.optimization_type = optimization_type
+            self.percent = 1.0
+            self.max_epochs_without_improvement = 40  # 30
+            self.logP_average_n_intermediate = 3  # TODO random.choice([1,10])
+            self.logP_average_n_final = 10
+            self.errorrate_average_n = 10
+            self.output_transfer = "identity"
+            self.annealing_T = 100  # in terms of epochs; 50 may be good
+            self.adapt_prior = False
+            self.init_parameters = None  # half result parameter, half hyperparameter, but more hyperparameter
+            self.init_results()
+
+        def init_results(self):
+            self.best_parameters = None
+            self.best_val_loss = inf
+            self.best_test_loss = inf
+            self.train_loss = []
+            self.val_loss = []
+            self.best_epoch = 0
+            self.best_val_error = inf
+            self.best_test_error = inf
+
+        def __repr__(self):
+            return "hyper %i" % hash(self)
+    return Hyper
 
 def get_init_data(data):
     hyper = Namespace()
     X, Z = data[:2]
-    hyper.example_input, hyper.example_output = X[0], Z[0]
+    if X is not None:
+        hyper.example_input = X[0]
+    hyper.example_output = Z[0]
     return hyper.__dict__
 
 def hyper_init_dict(hyper, hyper_dict, prefix="", do_copy=True):
@@ -246,8 +348,14 @@ def get_init_random():  # we directly refer to dict as sqlalchemy deletes the di
     hyper.opt_decay = np.random.uniform(0.78, 1)
     return hyper.__dict__
 
+def get_init_toy(datasetname):
+    hyper = Namespace()
+    hyper.max_epochs_without_improvement = 40  # 30
+    hyper.dim = 1 if "1d" in datasetname else 2
+    hyper.w_true = 0.0
+    return hyper.__dict__
 
-def get_init_several():
+def get_init_several(datasetname):
     hyper = Namespace()
     hyper.max_epochs_without_improvement = 40  # 30
     # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
@@ -259,10 +367,11 @@ def get_init_several():
     #     hyper.units_per_layer_plus = hyper.units_per_layer + hyper.units_per_layer * (hyper.n_normflows * 2)
     # except TypeError:
     #     # n_normflows not yet set
+    hyper.output_transfer = "identity"
     warnings.warn("don't forget to set hyper.units_per_layer_plus")
     return hyper.__dict__
 
-def get_init_mnist():
+def get_init_mnist(datasetname):
     hyper = Namespace()
     hyper.max_epochs_without_improvement = 5  # 30 epochs need extremely long here
     # batch_size=2 for comparison with maximum-likelihood (dimensions error was thrown in exactly those cases for batch_size=1
@@ -271,6 +380,7 @@ def get_init_mnist():
     hyper.n_layers = 2  # random.choice([1, 2])  # for comparison of parameters, n_layers=1 has crucial advantages
     hyper.units_per_layer = 400  # random.choice([50, 200]) - check whether baselineplus has an effect
     hyper.units_per_layer_plus = 1200
+    hyper.output_transfer = "softmax"
     return hyper.__dict__
 
 
@@ -308,8 +418,10 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
         val_kwargs['no_annealing'] = True
     tm.reduce_all_identities()
 
-    n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
-    mycycle = cycle_permute if hyper.annealing_T is None and hyper.optimization_type == "annealing" else cycle
+    # after this many steps we went through the whole data set once:
+    n_batches = Z.shape[0] // hyper.batch_size
+    # only for Uncertain Weights Annealing needed:
+    mycycle = cycle_permute if hyper.optimization_type == "annealing" and hyper.annealing_T is None else cycle
     if X is None:
         climin_args = izip(imap(lambda z: (z,), chunk(hyper.batch_size, mycycle(Z))), repeat({}))
     else:
