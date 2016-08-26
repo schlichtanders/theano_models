@@ -52,6 +52,8 @@ elif len(sys.argv) > 2:
 elif len(sys.argv) > 1:
     foldername = sys.argv[1]
 
+foldername += "_bugfixed"
+
 with ignored(OSError):
     os.mkdir(os.path.join(__path__, foldername))
 filepath = os.path.join(__path__, foldername, '%s.db' % filename)
