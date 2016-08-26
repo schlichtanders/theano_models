@@ -54,6 +54,10 @@ elif len(sys.argv) > 1:
 
 foldername += "_bugfixed"
 
+adapt_prior = False
+if "adapt_prior" in foldername or "adaptprior" in foldername or "adapt" in foldername:
+    adapt_prior = True
+
 with ignored(OSError):
     os.mkdir(os.path.join(__path__, foldername))
 filepath = os.path.join(__path__, foldername, '%s.db' % filename)
@@ -168,6 +172,7 @@ for ir in itertools.count():  # repeat the set
                 print ". . . . . . . . . . . . . . . . . . . . . ."
                 params['n_normflows'] = nn
                 params['percent'] = percent
+                params['adapt_prior'] = adapt_prior
                 if datasetname not in ["mnist", "toy1d", "toy2d"]:  # we need the n_normflow parameter for this to be valid
                     params['units_per_layer_plus'] = params['units_per_layer'] + params['units_per_layer'] * (params['n_normflows'] * 2)
                 optimize_all(Session(), params)
