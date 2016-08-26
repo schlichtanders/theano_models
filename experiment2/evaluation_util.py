@@ -474,9 +474,8 @@ def sample_best_hyper(best_tests, filepath, n_samples=1000):
         best_hyper_samples = OrderedDict()
 
     for hyper in best_tests:
-        parameters = best_tests[hyper]["best_parameters"]  # already include the results of hyper
         best_hyper_samples[hyper] = []
-        for params in parameters:
+        for params in best_tests[hyper]["best_parameters"]:  # already include the results of hyper
             if params is None:  # best_hyper[test][name][nn][0][ihyper] == inf:
                 continue  # both test should in principal find the same error
                 # this means, the best solution with parameters was still infinite, we have to skip it

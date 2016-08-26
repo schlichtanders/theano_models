@@ -141,9 +141,9 @@ def load_and_preprocess_data(datasetname):
 
 # SQLALCHEMY
 # ==========
-Base = declarative_base()
 
 def get_hyper():
+    Base = declarative_base()
     class Hyper(Base):
         __tablename__ = "hyper"
         id = Column(Integer, primary_key=True)
@@ -228,6 +228,7 @@ def get_hyper():
     return Hyper
 
 def get_old_hyper():
+    Base = declarative_base()
     class Hyper(Base):
         __tablename__ = "hyper"
         id = Column(Integer, primary_key=True)
@@ -399,46 +400,45 @@ def standard_flat(model):
 
 
 def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
-    # choose right loss
-    if "ml" in hyper.optimization_type:
-        loss = tm.loss_probabilistic(model)
-    elif "annealing" in hyper.optimization_type:
-        if hyper.annealing_T is None:
-            loss = tm.loss_variational(model)
-        else:
-            loss = tm.loss_normalizingflow(model)
+    # general configurations ---------------------------------------
     parameters = standard_flat(model)
 
     hyper.init_results()  # delete everything which might be there from another run
+    tm.reduce_all_identities()  # no finv(f(x))
     X, Z, VX, VZ, TX, TZ = data[:6]
+    n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
+
     val_args = (VZ,) if VX is None else (VZ, VX)
     test_args = (TZ,) if TX is None else (TZ, TX)
-    val_kwargs = {}
-    if "annealing" in hyper.optimization_type:
-        val_kwargs['no_annealing'] = True
-    tm.reduce_all_identities()
+    val_test_kwargs = {}
+    mycycle = cycle
 
-    # after this many steps we went through the whole data set once:
-    n_batches = Z.shape[0] // hyper.batch_size
-    # only for Uncertain Weights Annealing needed:
-    mycycle = cycle_permute if hyper.optimization_type == "annealing" and hyper.annealing_T is None else cycle
-    if X is None:
-        climin_args = izip(imap(lambda z: (z,), chunk(hyper.batch_size, mycycle(Z))), repeat({}))
-    else:
-        climin_args = izip(izip(chunk(hyper.batch_size, mycycle(Z)), chunk(hyper.batch_size, mycycle(X))), repeat({}))
-
+    # optimization type specifiy configurations ------------------------------
     if hyper.optimization_type == "ml":  # maximum likelihood
+        print "no annealing"
         numericalize_kwargs = dict(
             batch_mapreduce=meanmap,
         )
+        # here everything is computed sample-wise
+        if "n_data" in model:  # if the variational lower bound is used for ml optimization
+            model["n_data"].set_value(Z.shape[0])
+
+        loss = tm.loss_probabilistic(model)
+
     elif hyper.optimization_type == "ml_exp_average":
         numericalize_kwargs = dict(
             batch_mapreduce=meanmap,
             exp_average_n=hyper.exp_average_n,
             exp_ratio_estimator=hyper.exp_ratio_estimator,
         )
+        loss = tm.loss_probabilistic(model)
+
     elif hyper.optimization_type == "annealing":
+        val_test_kwargs['no_annealing'] = True
+
         if hyper.annealing_T is not None:
+            print "normalizing flow annealing"
+
             def weights_data():
                 T = n_batches * hyper.annealing_T
                 for t in xrange(T):
@@ -452,7 +452,15 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
                     weights_data=weights_data()
                 ),
             )
+            # here everything is computed batch-wise
+            if "n_data" in model:  # if the variational lower bound is used for ml optimization
+                model["n_data"].set_value(n_batches)
+
+            loss = tm.loss_normalizingflow(model)
+
         else:
+            print "uncertain weights annealing"
+
             def weights_regularizer_1epoch():
                 for i in range(1, n_batches + 1):
                     yield 2 ** (n_batches - i) / (2 ** n_batches - 1)
@@ -464,17 +472,29 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
                     weights_regularizer=cycle(weights_regularizer_1epoch())
                 ),
             )
+            # no n_data adaptation here as the regularizer is exactly the KL
+            # and is properly weighted by weights_regularizer_1epoch
+            # however we need to randomize mini-batches
+            mycycle = cycle_permute
+            loss = tm.loss_variational(model)
+
         if hyper.batch_size == 1:
             numericalize_kwargs['batch_precompile'] = "singleton"
     else:
         raise ValueError("Unkown type %s" % hyper.optimization_type)
+
+    # further with the optimization ---------------------------------
+    if X is None:
+        climin_args = izip(imap(lambda z: (z,), chunk(hyper.batch_size, mycycle(Z))), repeat({}))
+    else:
+        climin_args = izip(izip(chunk(hyper.batch_size, mycycle(Z)), chunk(hyper.batch_size, mycycle(X))), repeat({}))
 
     def _optimize(mode='FAST_RUN'):
         theano.config.mode = mode
         def adapt_init_params(ps):
             if hyper.init_parameters is None:
                 print "new random init_parameters"
-                return ps + np.random.normal(size=ps.shape, scale=1) # better more initial randomness
+                return ps + np.random.normal(size=ps.shape, scale=1)  # better more initial randomness
             else:
                 print "used given init_parameters"
                 return hyper.init_parameters
@@ -498,7 +518,7 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
         )
         # start values:
         hyper.init_parameters = copy(opt.wrt)
-        hyper.best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, *val_args, **val_kwargs)
+        hyper.best_val_loss = optimizer_kwargs['num_loss'](opt.wrt, *val_args, **val_test_kwargs)
         if plot_val is not None:
             add_point(plot_val, 0, hyper.best_val_loss)
         if plot_best_val is not None:
@@ -515,10 +535,10 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
             # collect and visualize validation loss for choosing the best model
             # val_loss = optimizer_kwargs['num_loss'](opt.wrt, VZ, VX, **val_kwargs)
             if hyper.logP_average_n_intermediate <= 1 or hyper.optimization_type.startswith("ml"):  # maximum_likelihood already averages over each single data point
-                val_loss = optimizer_kwargs['num_loss'](opt.wrt, *val_args, **val_kwargs)
+                val_loss = optimizer_kwargs['num_loss'](opt.wrt, *val_args, **val_test_kwargs)
             else:  # as we use batch_common_rng = True by default, for better comparison, average over several noisy weights:
                 val_loss = Average(hyper.logP_average_n_intermediate)(
-                    optimizer_kwargs['num_loss'], opt.wrt, *val_args, **val_kwargs)
+                    optimizer_kwargs['num_loss'], opt.wrt, *val_args, **val_test_kwargs)
             if val_loss < hyper.best_val_loss - EPS:
                 hyper.best_epoch = current_epoch
                 hyper.best_parameters = copy(opt.wrt)  # copy is needed as climin works inplace on array
@@ -535,9 +555,9 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
         print
         if hyper.best_parameters is not None:
             hyper.best_val_loss = Average(hyper.logP_average_n_final)(
-                optimizer_kwargs['num_loss'], hyper.best_parameters, *val_args, **val_kwargs)
+                optimizer_kwargs['num_loss'], hyper.best_parameters, *val_args, **val_test_kwargs)
             hyper.best_test_loss = Average(hyper.logP_average_n_final)(
-                optimizer_kwargs['num_loss'], hyper.best_parameters, *test_args, **val_kwargs)
+                optimizer_kwargs['num_loss'], hyper.best_parameters, *test_args, **val_test_kwargs)
 
     try:
         _optimize()

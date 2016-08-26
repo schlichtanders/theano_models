@@ -151,8 +151,8 @@ def loss_normalizingflow(model):
     return Merge(model, name=model.name+".loss_normflow", ignore_references=outputting_references,
         inputs=model.logP['inputs'] + model['inputs'],
         outputs=-model.logP['outputs'],
-        loss_data=-model.loglikelihood['outputs'] - model['logprior'],
-        loss_regularizer=model['logposterior'],
+        loss_data=-model.loglikelihood['outputs'] - T.inv(model['n_data'])*model['logprior'],
+        loss_regularizer=T.inv(model['n_data'])*model['logposterior'],
     )
 
 

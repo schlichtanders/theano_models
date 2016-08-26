@@ -87,6 +87,6 @@ pprint([(h.modelname, h.n_normflows, h.percent, h.best_val_loss) for h in best_h
 print "---------------------------------------------------------"
 # both methods are saving there results, also intermediately
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
-best_hyper_tests = eva.compute_test_results(best_hypers, data_gen, filepath=filepath_tests, n_trials=n_trials)
+best_hyper_tests = eva.compute_test_results(best_hypers, data_gen, filepath=filepath_tests, n_trials=n_trials, include_best_hyper=True)
 # Sample the approximate posterior distribution for evaluation
 best_hyper_samples = eva.sample_best_hyper(best_hyper_tests, filepath=filepath_samples)
