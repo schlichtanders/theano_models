@@ -1,34 +1,28 @@
 # coding: utf-8
 from __future__ import division
 
-import operator as op
-import os, platform, sys
-import random
-from ast import literal_eval
-from pprint import pformat, pprint
-
-import itertools
-import numpy as np
 import csv
+import itertools
+import os
+import platform
+import sys
+import warnings
+from ast import literal_eval
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from schlichtanders.mycontextmanagers import ignored
-from schlichtanders.mydicts import update
-from schlichtanders.myobjects import NestedNamespace, Namespace
-
+import experiment_models
+import experiment_toy_models
 import theano_models as tm
 import theano_models.deterministic_models as dm
 import theano_models.probabilistic_models as pm
-from theano.tensor.shared_randomstreams import RandomStreams
-from copy import copy
-import warnings
-
 from experiment_util import log_exceptions, hyper_init_dict, get_init_random, \
     optimize, load_and_preprocess_data, get_init_several, get_init_mnist, get_hyper, get_init_data, get_init_toy
-import experiment_models
-import experiment_toy_models
+from schlichtanders.mycontextmanagers import ignored
+from schlichtanders.mydicts import update
+from schlichtanders.myobjects import NestedNamespace
+from theano.tensor.shared_randomstreams import RandomStreams
 
 inf = float("inf")
 warnings.filterwarnings("ignore", category=DeprecationWarning)

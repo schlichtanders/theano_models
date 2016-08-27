@@ -1,25 +1,12 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
-import os, platform, sys
-import warnings
-from sklearn import cross_validation
-
-import numpy as np
-
-import matplotlib.pyplot as plt
-from frozendict import frozendict
 from sqlalchemy.exc import OperationalError
 
-from schlichtanders.mymatplotlib import Centre
-from matplotlib.colors import LogNorm
 import cPickle as pickle
 import os, platform, sys
-from pprint import pprint
-from sqlalchemy import Column, Integer, Unicode, UnicodeText, String, PickleType, Float, Boolean
 from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.orm import sessionmaker, Session, create_session
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.automap import automap_base
 import operator as op
 from collections import defaultdict, Counter, OrderedDict, Sequence
@@ -29,7 +16,6 @@ from copy import copy
 import warnings
 import experiment_toy_models
 import experiment_models
-import experiment_util
 from schlichtanders.mycontextmanagers import ignored
 from schlichtanders.myobjects import Namespace
 from schlichtanders.mygenerators import product
@@ -37,6 +23,8 @@ from schlichtanders.mygenerators import product
 import experiment_util
 import numpy as np
 import theano
+
+from ..experiment1 import experiment_util as ex1util
 
 
 __file__ = os.path.realpath('__file__')
@@ -46,8 +34,6 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-sys.path.append(__parent__)
-import experiment1.experiment_util as ex1util
 
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -167,32 +153,6 @@ def get_modes(hist, threshold_d=40, start_end_bottom=True):
 
 # EVALUATION
 # =============
-
-# helpers
-# -------
-def defaultdictdict():
-    return defaultdict(dict)
-
-def defaultdictdictdict():
-    return defaultdictdict()
-
-def defaultdictlist():
-    return defaultdict(list)
-
-def defaultdictdictlist():
-    return defaultdict(defaultdictlist)
-
-def tuple4list():
-    return [], [], [], []
-
-def defaultdicttuplelist():
-    return defaultdict(tuple4list)
-
-def defaultdictdicttuplelist():
-    return defaultdict(defaultdicttuplelist)
-
-def defaultdictlist():
-    return defaultdict(list)
 
 def gen_subfiles(*directories, **kwargs):
     key = kwargs.pop("key", lambda fn, path: True)

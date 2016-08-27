@@ -28,7 +28,7 @@ __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
 sys.path.append(__parent__)
-import experiment1.experiment_util as ex1util
+import experiments.experiment1.experiment_util as ex1util
 
 folders_parameters = [["experiment1","withpercent"], ["experiment1","first_useful_hyperparameter_search"], ['experiment1','run_windows']]
 folders_parameters = [os.path.join(__parent__, *fp) for fp in folders_parameters]
