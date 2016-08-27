@@ -151,8 +151,8 @@ def loss_normalizingflow(model):
     return Merge(model, name=model.name+".loss_normflow", ignore_references=outputting_references,
         inputs=model.logP['inputs'] + model['inputs'],
         outputs=-model.logP['outputs'],
-        loss_data=-model.loglikelihood['outputs'] - T.inv(model['n_data'])*model['logprior'],
-        loss_regularizer=T.inv(model['n_data'])*model['logposterior'],
+        loss_data=-model.loglikelihood['outputs'],
+        loss_regularizer=[-T.inv(model['n_data'])*model['logprior'], T.inv(model['n_data'])*model['logposterior']],
     )
 
 
@@ -251,14 +251,14 @@ def numericalize(loss, parameters,
     # Core
     # ----
     derivatives = {
-        "num_loss": lambda key: loss[key],
-        "num_jacobian": lambda key: theano.grad(loss[key], parameters, disconnected_inputs="warn"),
-        "num_hessian": lambda key: theano.gradient.hessian(loss[key], parameters)
+        "num_loss": lambda loss0: loss0,
+        "num_jacobian": lambda loss0: theano.grad(loss0, parameters, disconnected_inputs="warn"),
+        "num_hessian": lambda loss0: theano.gradient.hessian(loss0, parameters)
     }
 
-    def _numericalize(key_degree, key_loss):
+    def _numericalize(key_degree, loss0):
         """ compiles function with signature f(num_params, *loss_inputs) """
-        output = derivatives[key_degree](key_loss)
+        output = derivatives[key_degree](loss0)
         if batch_precompile == True:
             print "batch_precompile"
             # further the subgraph ``sub`` is computed
@@ -306,7 +306,7 @@ def numericalize(loss, parameters,
                     _f = theano_function([parameters] + loss['inputs'], output)  # TODO the parameters part could be precompiled in principle
                     _f = lift(_f, AverageExp(exp_average_n))
                 elif key_degree == "num_jacobian":
-                    Output = derivatives["num_loss"](key_loss)  # stammfunktion, therefore capital
+                    Output = derivatives["num_loss"](loss0)  # stammfunktion, therefore capital
 
                     __f = theano.function([parameters] + loss['inputs'], [Output, output], **theano_function_kwargs)
                     # TODO the parameters part could be precompiled in principle
@@ -351,21 +351,26 @@ def numericalize(loss, parameters,
                 f = _f
         return f
 
-    def get_numericalized(key):
-        if key not in derivatives:
-            raise KeyError("Key '%s' not computable." % key)
+    def get_numericalized(key_degree):
+        if key_degree not in derivatives:
+            raise KeyError("Key '%s' not computable." % key_degree)
         try:
             if annealing_combiner:
+                if isinstance(loss["loss_regularizer"], list):
+                    num_loss_regularizer = [theano_function([parameters], derivatives[key_degree](l))  # TODO support several here
+                                            for l in loss["loss_regularizer"]]
+                else:
+                    num_loss_regularizer = theano_function([parameters], derivatives[key_degree](loss["loss_regularizer"]))
                 return annealing_combiner(
-                    _numericalize(key, "loss_data"),
-                    theano_function([parameters], derivatives[key]("loss_regularizer"))
+                    _numericalize(key_degree, loss["loss_data"]),  # supporting several here is not possible if exp_ml shall be an option
+                    num_loss_regularizer
                 )
             else:
-                return _numericalize(key, "outputs")
+                return _numericalize(key_degree, loss["outputs"])
 
         except (KeyError, TypeError, ValueError) as e:
             # raise  # raise directly for debugging purposes
-            raise KeyError("Key '%s' not computable. Internal Error: %s" % (key, e))
+            raise KeyError("Key '%s' not computable. Internal Error: %s" % (key_degree, e))
         except AssertionError as e:
             # TODO got the following AssertionError which seems to be a bug deep in theano/proxifying theano
             # "Scan has returned a list of updates. This should not happen! Report this to theano-users (also include the script that generated the error)"
@@ -426,6 +431,64 @@ class AnnealingCombiner(object):
         return annealed
 
 
+class VariationalTemperingAnnealingCombiner(object):
+    """ implements variational annealing as shown in normalizing flow paper or variational tempering """
+
+    def __init__(self, weights=repeat(1), scale_by_len=("data", "regularizer")):
+        self.weights = weights
+        self.scale_by_len = scale_by_len
+
+    def __call__(self, loss_data, loss_regularizers):
+        prior, approx_posterior = loss_regularizers
+        def annealed(parameters, *loss_inputs, **kwargs):
+            length = {'data': 1, 'regularizer': 1}
+            with ignored(TypeError):
+                for key in self.scale_by_len:
+                    length[key] = len(loss_inputs[0])
+
+            if kwargs.pop('no_annealing', False):
+                return (loss_data(parameters, *loss_inputs) / length['data']
+                        + prior(parameters) / length['regularizer']
+                        + approx_posterior(parameters) / length['regularizer'])
+
+            w = next(self.weights)
+            return (w * loss_data(parameters, *loss_inputs) / length['data']
+                    + w * prior(parameters) / length['regularizer']
+                    + approx_posterior(parameters) / length['regularizer'])
+
+        annealed.wrapped = loss_data, loss_regularizer
+        return annealed
+
+class SpecialVariationalTemperingAnnealingCombiner(object):
+    """ implements an alternative to variational annealing as shown in normalizing flow paper or variational tempering
+
+    likelihood and posterior are tempered """
+
+    def __init__(self, weights=repeat(1), scale_by_len=("data", "regularizer")):
+        self.weights = weights
+        self.scale_by_len = scale_by_len
+
+    def __call__(self, loss_data, loss_regularizers):
+        prior, approx_posterior = loss_regularizers
+
+        def annealed(parameters, *loss_inputs, **kwargs):
+            length = {'data': 1, 'regularizer': 1}
+            with ignored(TypeError):
+                for key in self.scale_by_len:
+                    length[key] = len(loss_inputs[0])
+
+            if kwargs.pop('no_annealing', False):
+                return (loss_data(parameters, *loss_inputs) / length['data']
+                        + prior(parameters) / length['regularizer']
+                        + approx_posterior(parameters) / length['regularizer'])
+
+            w = next(self.weights)
+            return (w * loss_data(parameters, *loss_inputs) / length['data']
+                    + prior(parameters) / length['regularizer']
+                    + w * approx_posterior(parameters) / length['regularizer'])
+
+        annealed.wrapped = loss_data, loss_regularizer
+        return annealed
 """
 Concrete Numeric Optimizer Postmaps
 -----------------------------------

@@ -141,6 +141,15 @@ def load_and_preprocess_data(datasetname):
 
 # SQLALCHEMY
 # ==========
+def hyper_empty_results(hyper):
+    hyper.best_parameters = None
+    hyper.best_val_loss = inf
+    hyper.best_test_loss = inf
+    hyper.train_loss = []
+    hyper.val_loss = []
+    hyper.best_epoch = 0
+    hyper.best_val_error = inf
+    hyper.best_test_error = inf
 
 def get_hyper():
     Base = declarative_base()
@@ -210,17 +219,7 @@ def get_hyper():
             self.init_parameters = None  # half result parameter, half hyperparameter, but more hyperparameter
             self.dim = None
             self.w_true = None
-            self.init_results()
-
-        def init_results(self):
-            self.best_parameters = None
-            self.best_val_loss = inf
-            self.best_test_loss = inf
-            self.train_loss = []
-            self.val_loss = []
-            self.best_epoch = 0
-            self.best_val_error = inf
-            self.best_test_error = inf
+            hyper_empty_results(self)
 
         def __repr__(self):
             return "hyper %i" % hash(self)
@@ -279,6 +278,8 @@ def get_old_hyper():
             datasetname : str
             """
             self.output_transfer = "identity"  # currently this is always the case
+            self.example_input = None
+            self.example_output = None
             self.datasetname = datasetname
             self.modelname = modelname
             self.optimization_type = optimization_type
@@ -291,17 +292,7 @@ def get_old_hyper():
             self.annealing_T = 100  # in terms of epochs; 50 may be good
             self.adapt_prior = False
             self.init_parameters = None  # half result parameter, half hyperparameter, but more hyperparameter
-            self.init_results()
-
-        def init_results(self):
-            self.best_parameters = None
-            self.best_val_loss = inf
-            self.best_test_loss = inf
-            self.train_loss = []
-            self.val_loss = []
-            self.best_epoch = 0
-            self.best_val_error = inf
-            self.best_test_error = inf
+            hyper_empty_results(self)
 
         def __repr__(self):
             return "hyper %i" % hash(self)
@@ -403,7 +394,7 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
     # general configurations ---------------------------------------
     parameters = standard_flat(model)
 
-    hyper.init_results()  # delete everything which might be there from another run
+    hyper_empty_results(hyper) # delete everything which might be there from another run
     tm.reduce_all_identities()  # no finv(f(x))
     X, Z, VX, VZ, TX, TZ = data[:6]
     n_batches = Z.shape[0] // hyper.batch_size  # after this many steps we went through the whole data set once
@@ -433,13 +424,13 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
         )
         loss = tm.loss_probabilistic(model)
 
-    elif hyper.optimization_type == "annealing":
+    elif hyper.optimization_type == "specialannealing":
         val_test_kwargs['no_annealing'] = True
 
         if hyper.annealing_T is not None:
-            print "normalizing flow annealing"
+            print "special annealing"
 
-            def weights_data():
+            def weights_variational_tempering():
                 T = n_batches * hyper.annealing_T
                 for t in xrange(T):
                     yield min(1, 0.01 + t / T)  # 10000
@@ -448,8 +439,33 @@ def optimize(data, hyper, model, error_func, plot_val=None, plot_best_val=None):
 
             numericalize_kwargs = dict(
                 batch_mapreduce=summap,  # meaning is/must be done in Annealing
-                annealing_combiner=tm.AnnealingCombiner(
-                    weights_data=weights_data()
+                annealing_combiner=tm.SpecialVariationalTemperingAnnealingCombiner(
+                    weights=weights_variational_tempering()
+                ),
+            )
+            # here everything is computed batch-wise
+            if "n_data" in model:  # if the variational lower bound is used for ml optimization
+                model["n_data"].set_value(n_batches)
+
+            loss = tm.loss_normalizingflow(model)
+
+    elif hyper.optimization_type == "annealing":
+        val_test_kwargs['no_annealing'] = True
+
+        if hyper.annealing_T is not None:
+            print "normalizing flow annealing"
+
+            def weights_variational_tempering():
+                T = n_batches * hyper.annealing_T
+                for t in xrange(T):
+                    yield min(1, 0.01 + t / T)  # 10000
+                while True:
+                    yield 1
+
+            numericalize_kwargs = dict(
+                batch_mapreduce=summap,  # meaning is/must be done in Annealing
+                annealing_combiner=tm.VariationalTemperingAnnealingCombiner(
+                    weights=weights_variational_tempering()
                 ),
             )
             # here everything is computed batch-wise

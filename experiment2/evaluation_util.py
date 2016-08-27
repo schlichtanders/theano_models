@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker, Session, create_session
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.automap import automap_base
 import operator as op
-from collections import defaultdict, Counter, OrderedDict
+from collections import defaultdict, Counter, OrderedDict, Sequence
 import csv
 import heapq
 from copy import copy
@@ -340,15 +340,29 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
     if n_normflows is None:
         n_normflows = [None]
 
-    for attr, prefix, percent, nn in product(test_attrs, modelnames, percentages, n_normflows):
+    for attr, modelname, percent, nn in product(test_attrs, modelnames, percentages, n_normflows):
         # find best fit
         sub_all_data = []
         for h in all_hypers:
-            b_nn = nn is None or h.n_normflows == nn
-            b_percent = percent is None or h.percent == percent
-            if b_nn and b_percent:
+            if nn is None:
+                b_nn = True
+            elif isinstance(nn, Sequence):
+                b_nn = h.n_normflows in nn
+            else:
+                b_nn = h.n_normflows == nn
+
+            if percent is None:
+                b_percent = True
+            elif isinstance(b_percent, Sequence):
+                b_percent = h.percent in percent
+            else:
+                b_percent = h.percent == percent
+
+            b_modelname = not hasattr(h, "modelname") or h.modelname == modelname  # modelname is simpler to stay unique (no list) as the format has to be fixed
+            if b_nn and b_percent and b_modelname:
                 # reformot old version to new one:
-                sub_all_data.append(version_fix(copy(h), prefix))
+                sub_all_data.append(version_fix(copy(h), modelname))
+        # print("get_best_hypers modelname=%s, len(sub)=%i" % (modelname, len(sub_all_data)))
 
         if sub_all_data:
             best = heapq.nsmallest(1, sub_all_data, key=get_key_hyper(attr))[0]  # only the very best is wanted to keep it simple and clean
@@ -363,6 +377,7 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
                            percentages=None, n_normflows=None):
     # # Collect models and find best ones
     # best_hyper = eva.get_best_hyper(["toy_windows", "toy_linux"], Hyper, model_prefixes, test_suffix=["best_val_loss"])
+    Hyper = experiment_util.get_hyper()
     modelnames_to_optimization_type = {  # sorted by optimization type
         'baselinedet': "ml",
         'baselinedetplus': "ml",
@@ -376,18 +391,23 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
     }
 
     if "toy" in datasetname:
-        Hypers = ex1util.get_toy_hyper(), ex1util.get_toy_semiold_hyper(), ex1util.get_toy_old_hyper(), experiment_util.Hyper
+        Hypers = (ex1util.get_toy_hyper(), ex1util.get_toy_semiold_hyper(), ex1util.get_toy_old_hyper(),
+                  experiment_util.get_old_hyper(), Hyper)
 
         dim = 1 if "1d" in datasetname else 2
-        example_input = np.array([0.0] * dim, dtype=theano.config.floatX)
+        w_true = 0.0
+        example_input = None
         example_output = [0.0]
         output_transfer = None
 
     else:
-        Hypers = ex1util.get_hyper(), ex1util.get_semiold_hyper(), ex1util.get_old_hyper(), experiment_util.Hyper
+        Hypers = (ex1util.get_hyper(), ex1util.get_semiold_hyper(), ex1util.get_old_hyper(),
+                  experiment_util.get_old_hyper(), Hyper)
 
         data, error_func = experiment_util.load_and_preprocess_data(datasetname)
         X, Z, VX, VZ, TX, TZ = data
+        dim = None
+        w_true = None
         example_input = X[0]
         example_output = Z[0]
         output_transfer = "softmax" if datasetname == "mnist" else "identity"
@@ -402,16 +422,38 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
                                  test_attrs=test_attrs, key_files=lambda fn, p: datasetname in fn)
 
     # further unify hyper representation
+    new_best_hypers = []
     for h in best_hypers:
+        h.dim = dim
+        h.w_true = w_true
         h.example_input = example_input
         h.example_output = example_output
         h.output_transfer = output_transfer
         h.optimization_type = modelnames_to_optimization_type[h.modelname]
         h.datasetname = datasetname
+        with ignored(AttributeError):
+            del h.id  # should be set new
+        if not hasattr(h, "adapt_prior "):
+            h.adapt_prior = False
+        if not hasattr(h, "annealing_T"):
+            h.annealing_T = None  # in terms of epochs; 50 may be good
+        new_h = Hyper(h.datasetname, h.modelname, h.optimization_type)  # fix possibly different types
+        # print(h.__dict__.keys())
+        experiment_util.hyper_init_dict(new_h, h.__dict__, do_copy=False)  # we copied already
+        new_best_hypers.append(new_h)
 
-    return best_hypers
+    return new_best_hypers
+
+def rerun_hyper(hyper, data_gen):
+    data, error_func = data_gen(hyper)
+    model_module = experiment_toy_models if "toy" in hyper.datasetname else experiment_models
+    model, approx_posterior = getattr(model_module, hyper.modelname)(hyper)
+    return experiment_util.optimize(data, hyper, model, error_func)  # returns adapted hyper with new results
+    # Note that init_parameters should always fit as the models' normalizing flows is also used
 
 
+
+'''
 def compute_test_results(best_hypers, data_gen, filepath, n_trials=20, include_best_hyper=True):
     """
 
@@ -465,7 +507,7 @@ def compute_test_results(best_hypers, data_gen, filepath, n_trials=20, include_b
         with open(filepath, "wb") as f:
             pickle.dump(best_tests, f, -1)
     return best_tests
-
+'''
 
 def sample_best_hyper(best_tests, filepath, n_samples=1000):
     try:

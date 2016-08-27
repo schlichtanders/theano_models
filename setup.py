@@ -54,7 +54,8 @@ setup(
         "frozendict>=0.6",
         "h5py>=2.5.0",
         "pydot>=1.1.0",
-        "scikit-learn>=0.14.1"
+        "scikit-learn>=0.14.1",
+        "sqlalchemy>=1.0.13"
     ],
     dependency_links=[
         "git+https://github.com/schlichtanders/schlichtanders.git#egg=schlichtanders-0.1.0",
