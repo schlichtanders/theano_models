@@ -433,7 +433,7 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
         h.datasetname = datasetname
         with ignored(AttributeError):
             del h.id  # should be set new
-        if not hasattr(h, "adapt_prior "):
+        if not hasattr(h, "adapt_prior"):
             h.adapt_prior = False
         if not hasattr(h, "annealing_T"):
             h.annealing_T = None  # in terms of epochs; 50 may be good
