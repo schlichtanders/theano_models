@@ -24,15 +24,18 @@ import experiment_util
 import numpy as np
 import theano
 
-from ..experiment1 import experiment_util as ex1util
-
-
 __file__ = os.path.realpath('__file__')
 if platform.system() == "Windows":
     from schlichtanders.myos import replace_unc
     __file__ = replace_unc(__file__)
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
+
+if __package__ is None:
+    sys.path.append(__parent__)
+    from experiment1 import experiment_util as ex1util
+else:
+    from ..experiment1 import experiment_util as ex1util
 
 
 

@@ -113,6 +113,7 @@ for h in best_hypers:
     h.annealing_T = 100  # this is now standard
     h.adapt_prior = adapt_prior  # this not =) taken from foldername
     h.init_parameters = None
+    h.percent = 1.0
 
 
 # To see validation performance and whether it makes sense to sample these

@@ -39,9 +39,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 inf = float('inf')
 
 
-foldername = "best_test_sampled"
-filename = "several"
-datasetname = "energy"
+foldername = "testing_stuff_adapt"
+filename = "toy1d"
+datasetname = "toy1d"
 
 #overwrite as far as given:
 if len(sys.argv) > 3:
@@ -82,14 +82,18 @@ best_hypers_rest = eva.get_best_hyper_autofix(
     n_normflows=n_normflows_rest,
     modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet"))
 
-n_normflows_radial = (1, 2, 4)  # sometimes 20 is not good, then take 8
+if "toy" in datasetname:
+    n_normflows_radial = (2, 4, 8)
+else:
+    n_normflows_radial = (1, 2, 4)  # sometimes 20 is not good, then take 8
 best_hypers_radial = eva.get_best_hyper_autofix(
     datasetname, folders_parameters,
     test_attrs=["best_val_error"],
     n_normflows=n_normflows_radial,
     modelnames=("radialflow", "radialflowdet"))
-for h in best_hypers_radial:
-    h.n_normflows *= 2  # old version encoded this differently
+if "toy" not in datasetname:
+    for h in best_hypers_radial:
+        h.n_normflows *= 2  # old version encoded this differently
 
 
 # the following also works for radialflow, as here 20 was almost always not suitable
@@ -107,7 +111,9 @@ best_hypers = best_hypers_rest + best_hypers_radial + best_hypers_16
 for h in best_hypers:
     h.annealing_T = 100  # this is now standard
     h.adapt_prior = adapt_prior  # this not =) taken from foldername
-    if adapt_prior and h.init_parameters is not None:
+    h.percent = 1.0
+    if adapt_prior and h.init_parameters is not None and h.modelname != "baselinedet":
+        # baselinedet has no prior, hence no additional parameter is needed there
         h.init_parameters = np.r_[h.init_parameters, 0]
 
 print "---------------------------------------------------------"
@@ -130,6 +136,3 @@ for h in best_hypers:
         new_h = eva.rerun_hyper(h, data_gen)
         sql_session.add(new_h)
         sql_session.commit()
-
-# Sample the approximate posterior distribution for evaluation
-# best_hyper_samples = eva.sample_best_hyper(best_hyper_tests, filepath=filepath_samples)
