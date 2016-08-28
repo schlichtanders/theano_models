@@ -32,16 +32,17 @@ __parent__ = os.path.dirname(__path__)
 
 sys.path.append(__parent__)
 
-folders_parameters = [["experiment2", "windows_rerunold_all"], ["experiment2", "windows_rerunoldagain_radialflow_and_co"]]
+# folders_parameters = [["experiment1","withpercent"], ["experiment1","first_useful_hyperparameter_search"], ['experiment1','run_windows']]
+folders_parameters = [["experiment2","windows_newannealing2"]]
 folders_parameters = [os.path.join(__parent__, *fp) for fp in folders_parameters]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 inf = float('inf')
 
 
-foldername = "best_test_sampled"
-filename = "several"
-datasetname = "energy"
+foldername = "rerun_toy2d"
+filename = "toy2d"
+datasetname = "toy2d"
 
 #overwrite as far as given:
 if len(sys.argv) > 3:
@@ -53,6 +54,11 @@ elif len(sys.argv) > 1:
 
 with ignored(OSError):
     os.mkdir(os.path.join(__path__, foldername))
+
+adapt_prior = False
+if "adapt_prior" in foldername or "adaptprior" in foldername or "adapt" in foldername:
+    print "using adaptive prior"
+    adapt_prior = True
 
 filepath_tests = os.path.join(__path__, foldername, "%s.db" % filename)
 # filepath_samples = os.path.join(__path__, foldername, "%s_samples.pkl" % datasetname)
@@ -69,19 +75,53 @@ def data_gen(hyper):
 # compute everything:
 print "datasetname", datasetname
 
-n_normflows = [2, 4, 8, 16]
-best_hypers = eva.get_best_hyper_autofix(
+# n_normflows = [2, 5, 10, 25] if "toy" in datasetname else [10, 25]
+n_normflows_2 = (2,)  # sometimes 20 is not good, then take 8
+best_hypers_2 = eva.get_best_hyper_autofix(
     datasetname, folders_parameters,
     test_attrs=["best_val_error"],
-    n_normflows=n_normflows,
-    # modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
-    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflowdet"))  # ignoring radialflow for now
+    n_normflows=n_normflows_2,
+    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
+
+n_normflows_48 = (5, 10)
+best_hypers_48 = eva.get_best_hyper_autofix(
+    datasetname, folders_parameters,
+    test_attrs=["best_val_error"],
+    n_normflows=n_normflows_48,
+    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
+for h in best_hypers_48:
+    if h.n_normflows == 5:
+        h.n_normflows = 4
+    elif h.n_normflows == 10:
+        h.n_normflows = 8
+    else:
+        raise ValueError("should not happen")
+    h.init_parameters = None
+
+
+n_normflows_16 = [[10, 25]]
+best_hypers_16 = eva.get_best_hyper_autofix(
+    datasetname, folders_parameters,
+    test_attrs=["best_val_error"],
+    n_normflows=n_normflows_16,
+    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
+for h in best_hypers_16:
+    h.n_normflows = 16
+    h.init_parameters = None
+
+
+best_hypers = best_hypers_2 + best_hypers_48 + best_hypers_16
+for h in best_hypers:
+    h.annealing_T = 100  # this is now standard
+    h.adapt_prior = adapt_prior  # this not =) taken from foldername
+    h.percent = 1.0
+    if adapt_prior and h.init_parameters is not None and h.modelname != "baselinedet":
+        # baselinedet has no prior, hence no additional parameter is needed there
+        h.init_parameters = np.r_[h.init_parameters, 0]
 
 print "---------------------------------------------------------"
 pprint([(h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error) for h in best_hypers])  # To see validation performance and whether it makes sense to sample these
 print "---------------------------------------------------------"
-
-
 
 
 engine = create_engine('sqlite:///' + filepath_tests)  # os.path.join(__path__, foldername, '%s.db' % filename)
@@ -99,6 +139,3 @@ for h in best_hypers:
         new_h = eva.rerun_hyper(h, data_gen)
         sql_session.add(new_h)
         sql_session.commit()
-
-# Sample the approximate posterior distribution for evaluation
-# best_hyper_samples = eva.sample_best_hyper(best_hyper_tests, filepath=filepath_samples)

@@ -59,23 +59,6 @@ filepath_samples = os.path.join(__path__, foldername, "%s_samples.pkl" % dataset
 # -------------------------------------------
 
 
-# # Collect models and find best ones
-# best_hyper = eva.get_best_hyper(["toy_windows", "toy_linux"], Hyper, model_prefixes, test_suffix=["best_val_loss"])
-if "toy" in datasetname:
-    dim = 1 if "1d" in datasetname else 2
-    sampler = experiment_toy_models.toy_likelihood(dim=dim).function()
-    def data_gen(hyper):
-        x_true = np.array([0.0] * dim, dtype=theano.config.floatX)
-        _Z = np.array([sampler(x_true) for _ in range(1000)], dtype=theano.config.floatX)
-        Z, TZ = cross_validation.train_test_split(_Z, test_size=0.1)  # 10% test used in paper
-        Z, VZ = cross_validation.train_test_split(Z, test_size=0.1)  # 20% validation used in paper
-        data = None, Z, None, VZ, None, TZ  # None represents X data
-        return data, experiment_util.RMSE
-else:
-    def data_gen(hyper):
-        return experiment_util.load_and_preprocess_data(hyper.datasetname)
-
-
 # compute everything:
 print "n_trials", n_trials
 print "datasetname", datasetname

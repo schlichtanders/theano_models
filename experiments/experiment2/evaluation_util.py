@@ -1,6 +1,8 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
+
+from frozendict import frozendict
 from sqlalchemy.exc import OperationalError
 
 import cPickle as pickle
@@ -244,6 +246,8 @@ def get_key_hyper(attr):
         val = getattr(h, attr)
         if val == -inf:
             return inf
+        if h.best_val_loss == inf or h.best_val_error == inf:  # works as the format should be fixed before
+            return inf
         return val
     return key_hyper
 
@@ -335,6 +339,50 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
     return best_hypers  # check for duplicates (might be the case in old hyper representation)
 
 
+def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_instead=None, key_files=lambda fn, path: True):
+    if attrs_key is None:
+        attrs_key = ("datasetname", "modelname",
+        "opt_decay", "minus_log_s1", "batch_size",  #"opt_identifier", "opt_offset", "opt_momentum",
+        "n_normflows", "adapt_prior", "init_parameters")
+    if attrs_hash_str_instead is None:
+        if "init_parameters" in attrs_key:
+            attrs_hash_str_instead = ("init_parameters",)
+        else:
+            attrs_hash_str_instead = tuple()
+
+
+    all_hypers = []
+    for f in gen_subfiles(*folders, key=key_files):
+        engine = create_engine('sqlite:///' + f)  # echo=True
+        if Hypers is None:
+            Base = automap_base()
+            Base.prepare(engine, reflect=True)
+            Hyper = Base.classes.hyper
+
+            session = Session(engine)
+            all_hypers += session.query(Hyper).all()
+        else:
+            for Hyper in Hypers:
+                try:
+                    Hyper.metadata.create_all(engine)
+                    session = Session(engine)
+                    all_hypers += session.query(Hyper).all()
+                    break
+                except OperationalError:
+                    continue
+
+    # sort hypers according to parameters
+    sorted_dict = defaultdict(list)
+    for h in all_hypers:
+        # s = "\n".join(["%-20s %s" % (attr, getattr(h, attr)) for attr in sort_attrs])
+        d = {attr: getattr(h, attr) for attr in attrs_key}
+        for attr in attrs_hash_str_instead:
+            d[attr] = hash(str(d[attr]))
+        sorted_dict[frozendict(d)].append(h)
+
+    return sorted_dict
+
+
 def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_val_loss', 'best_val_error'],
                            modelnames=("planarflow", "planarflowdet", "radialflow", "radialflowdet"),
                            percentages=None, n_normflows=None):
@@ -407,6 +455,7 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
 
     return new_best_hypers
 
+
 def rerun_hyper(hyper, data_gen):
     data, error_func = data_gen(hyper)
     model_module = experiment_toy_models if "toy" in hyper.datasetname else experiment_models
@@ -472,6 +521,7 @@ def compute_test_results(best_hypers, data_gen, filepath, n_trials=20, include_b
     return best_tests
 '''
 
+"""
 def sample_best_hyper(best_tests, filepath, n_samples=1000):
     try:
         best_hyper_samples = load_dict(filepath)
@@ -492,7 +542,16 @@ def sample_best_hyper(best_tests, filepath, n_samples=1000):
             best_hyper_samples[hyper].append(np.array([sampler() for _ in xrange(n_samples)]))
         with open(filepath, "wb") as f:
             pickle.dump(best_hyper_samples, f, -1)
+"""
 
+def sample_hyper(hyper, n_samples=1000):
+    model_module = experiment_toy_models if "toy" in hyper.datasetname else experiment_models
+    model, approx_posterior = getattr(model_module, hyper.modelname)(hyper)
+    flat = experiment_util.standard_flat(model)
+    sampler = theano.function([], approx_posterior['outputs'],
+                              givens={flat: hyper.best_parameters})  # reduces amount of runtime
+    # each column of samples stands for a parameter
+    return np.array([sampler() for _ in xrange(n_samples)])
 
 # Test error
 # ==========
@@ -512,32 +571,26 @@ def load_test_results(datasetname):
 # Modes
 # -----
 
-def get_best_modes(leaf, threshold_d=40):
-    new_leaf = []
-    for samples in leaf:
-        # each column of samples stands for a parameter
-        for c in xrange(samples.shape[1]):
-            hist = np.histogram(samples[:,c], bins="auto")[0]
-            new_leaf.append(get_modes(hist, threshold_d=threshold_d))  # just append all
-    return new_leaf
+def get_best_modes(samples, threshold_d=40):
+    modes_per_param = []
+    for c in xrange(samples.shape[1]):
+        hist = np.histogram(samples[:,c], bins="auto")[0]
+        modes_per_param.append(get_modes(hist, threshold_d=threshold_d))  # just append all
+    return modes_per_param
 
 
-def get_nr_modes_(leaf):
-    return Counter(map(len, leaf))
+def get_nr_modes_(modes_per_parm):
+    return Counter(map(len, modes_per_parm))
 
-def get_nr_modes(leaf, threshold_d=40):
-    return get_nr_modes_(get_best_modes(leaf, threshold_d=threshold_d))
+def get_nr_modes(samples, threshold_d=40):
+    return get_nr_modes_(get_best_modes(samples, threshold_d=threshold_d))
 
 # Correlations
 # ------------
 
 
-def get_best_correlations(leaf):
-    new_leaf = []
-    for samples in leaf:
-        corr = np.corrcoef(samples, rowvar=0)
-        new_leaf.append(corr)
-    return new_leaf
+def get_best_correlations(samples):
+    return np.corrcoef(samples, rowvar=0)
 
 
 # KL divergence
@@ -586,3 +639,13 @@ def compute_kl(best_hyper_samples):
                     best_kl[test][percent][nn].append(kl_matrix)
     return best_kl
 '''
+
+
+def get_hist(samples):
+    dimensionality = samples.shape[1]
+    if dimensionality == 1:
+        return np.histogram(samples, bins="auto", density=True)
+    elif dimensionality == 2:
+        _, edges_x = np.histogram(samples[:, 0], bins="auto", density=True)
+        _, edges_y = np.histogram(samples[:, 1], bins="auto", density=True)
+        return np.histogram2d(samples[:, 0], samples[:, 1], bins=(edges_x, edges_y))
