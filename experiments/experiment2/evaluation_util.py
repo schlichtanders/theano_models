@@ -285,7 +285,8 @@ def get_single_best_hyper(folders, modelname, Hypers=None, attr="best_val_loss",
 
 def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 'planarflow',
                                                    'planarflowdet', 'radialflow', 'radialflowdet'),
-                   percentages=(0.25, 0.5, 1.0), n_normflows=(5,10,20,30), test_attrs=("best_val_loss", "val_error_rate"), key_files=lambda fn, path:True):
+                   percentages=(0.25, 0.5, 1.0), n_normflows=(5,10,20,30), test_attrs=("best_val_loss", "val_error_rate"),
+                   key_files=lambda fn, path:True, take_best_n=1):
     best_hypers = []
     all_hypers = []
     for f in gen_subfiles(*folders, key=key_files):
@@ -337,9 +338,10 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
         # print("get_best_hypers modelname=%s, len(sub)=%i" % (modelname, len(sub_all_data)))
 
         if sub_all_data:
-            best = heapq.nsmallest(1, sub_all_data, key=get_key_hyper(attr))[0]  # only the very best is wanted to keep it simple and clean
-            common_format = Namespace({k: v for k, v in best.__dict__.iteritems() if k[:3] not in ["bas", "mix", "pla", "rad"]})  # namespace ensures standard instance access
-            best_hypers.append(common_format)
+            bests = heapq.nsmallest(take_best_n, sub_all_data, key=get_key_hyper(attr)) # only the very best is wanted to keep it simple and clean
+            for best in bests:
+                common_format = Namespace({k: v for k, v in best.__dict__.iteritems() if k[:3] not in ["bas", "mix", "pla", "rad"]})  # namespace ensures standard instance access
+                best_hypers.append(common_format)
         # else nothing is appended
     return best_hypers  # check for duplicates (might be the case in old hyper representation)
 
@@ -404,7 +406,7 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
 
 def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_val_loss', 'best_val_error'],
                            modelnames=("planarflow", "planarflowdet", "radialflow", "radialflowdet"),
-                           percentages=None, n_normflows=None):
+                           percentages=None, n_normflows=None, take_best_n=1):
     # # Collect models and find best ones
     # best_hyper = eva.get_best_hyper(["toy_windows", "toy_linux"], Hyper, model_prefixes, test_suffix=["best_val_loss"])
     Hyper = experiment_util.get_hyper()
@@ -449,7 +451,9 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
                                  modelnames=modelnames,
                                  percentages=percentages,
                                  n_normflows=n_normflows,
-                                 test_attrs=test_attrs, key_files=lambda fn, p: datasetname in fn)
+                                 test_attrs=test_attrs,
+                                 key_files=lambda fn, p: datasetname in fn,
+                                 take_best_n=take_best_n)
 
     # further unify hyper representation
     new_best_hypers = []

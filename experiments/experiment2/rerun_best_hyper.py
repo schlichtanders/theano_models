@@ -78,12 +78,11 @@ best_hypers = eva.get_best_hyper_autofix(
     datasetname, folders_parameters,
     test_attrs=["best_val_error"],
     n_normflows=n_normflows,
-    # modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
-    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))  # ignoring radialflow for now
+    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
 
 
 grouped_hypers = eva.get_repeated_hypers(folders_parameters, Hypers=[Hyper], for_given_hypers_only=best_hypers).values()
-grouped_hypers  = sorted(grouped_hypers, key=lambda hs: len(hs))
+grouped_hypers = sorted(grouped_hypers, key=lambda hs: len(hs))
 
 left_best_hypers = []
 print "---------------------------------------------------------"
@@ -98,8 +97,11 @@ Hyper.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
-for h in left_best_hypers:
+for _h in left_best_hypers:
     # sometimes little things seem to be missing:
+    # problems with saving these hypers might be fixed by creating new hyper
+    h = Hyper(_h.datasetname, _h.modelname, _h.optimization_type)
+    experiment_util.hyper_init_dict(h, _h.__dict__)
     h.max_epochs_without_improvement = 40
     h.logP_average_n_intermediate = 3
     h.logP_average_n_final = 10
