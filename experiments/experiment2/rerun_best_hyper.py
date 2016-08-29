@@ -55,9 +55,9 @@ elif len(sys.argv) > 1:
     foldername = sys.argv[1]
 
 with ignored(OSError):
-    os.mkdir(os.path.join(__path__, foldername))
+    os.mkdir(os.path.join(__path__, "final", foldername))
 
-filepath_tests = os.path.join(__path__, foldername, "%s.db" % filename)
+filepath_tests = os.path.join(__path__, "final", foldername, "%s.db" % filename)
 # filepath_samples = os.path.join(__path__, foldername, "%s_samples.pkl" % datasetname)
 # -------------------------------------------
 
