@@ -33,6 +33,7 @@ __parent__ = os.path.dirname(__path__)
 sys.path.append(__parent__)
 
 folders_parameters = [["experiment2", "windows_rerunold_all"],
+                      ["experiment2", "windows_rerun1_almost_all"],
                       ["experiment2", "windows_rerunoldagain_radialflow_and_co"],
                       ["experiment2", "windows_rerunradialflow_all"],
                       ["experiment2", "windows_reruntoy2d_all"]]
@@ -55,7 +56,7 @@ elif len(sys.argv) > 1:
     foldername = sys.argv[1]
 
 with ignored(OSError):
-    os.mkdir(os.path.join(__path__, "final", foldername))
+    os.makedirs(os.path.join(__path__, "final", foldername))
 
 filepath_tests = os.path.join(__path__, "final", foldername, "%s.db" % filename)
 # filepath_samples = os.path.join(__path__, foldername, "%s_samples.pkl" % datasetname)
@@ -81,14 +82,15 @@ best_hypers = eva.get_best_hyper_autofix(
     modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))  # ignoring radialflow for now
 
 
-repeated_hypers = eva.get_repeated_hypers(folders_parameters, Hypers=[Hyper], for_given_hypers_only=best_hypers)
+grouped_hypers = eva.get_repeated_hypers(folders_parameters, Hypers=[Hyper], for_given_hypers_only=best_hypers).values()
+grouped_hypers  = sorted(grouped_hypers, key=lambda hs: len(hs))
 
 left_best_hypers = []
 print "---------------------------------------------------------"
-for k, v in repeated_hypers.iteritems():
-    if len(v) <= 20:
-        left_best_hypers.append(v[0])
-        print len(v), v[0].modelname, v[0].n_normflows, v[0].best_val_loss, v[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
+for hs in grouped_hypers:
+    if len(hs) <= 20:
+        left_best_hypers.append(hs[0])
+        print len(hs), hs[0].modelname, hs[0].n_normflows, hs[0].best_val_loss, hs[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
 print "---------------------------------------------------------"
 
 engine = create_engine('sqlite:///' + filepath_tests)  # os.path.join(__path__, foldername, '%s.db' % filename)
