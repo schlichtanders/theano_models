@@ -309,7 +309,7 @@ def get_init_data(data):
 def hyper_init_dict(hyper, hyper_dict, prefix="", do_copy=True):
     prefix = fix_prefix(prefix)
     for k, v in hyper_dict.iteritems():
-        if not k.startswith("_"):
+        if not k.startswith("_") and k != "id":
             setattr(hyper, prefix + k, copy(v) if do_copy else v)
     return hyper
 
