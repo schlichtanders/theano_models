@@ -32,14 +32,17 @@ __parent__ = os.path.dirname(__path__)
 
 sys.path.append(__parent__)
 
-folders_parameters = [["experiment2", "windows_rerunold_all"], ["experiment2", "windows_rerunoldagain_radialflow_and_co"]]
+folders_parameters = [["experiment2", "windows_rerunold_all"],
+                      ["experiment2", "windows_rerunoldagain_radialflow_and_co"],
+                      ["experiment2", "windows_rerunradialflow_all"],
+                      ["experiment2", "windows_reruntoy2d_all"]]
 folders_parameters = [os.path.join(__parent__, *fp) for fp in folders_parameters]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 inf = float('inf')
 
 
-foldername = "best_test_sampled"
+foldername = "final_rerun"
 filename = "several"
 datasetname = "energy"
 
@@ -75,24 +78,29 @@ best_hypers = eva.get_best_hyper_autofix(
     test_attrs=["best_val_error"],
     n_normflows=n_normflows,
     # modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
-    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflowdet"))  # ignoring radialflow for now
+    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))  # ignoring radialflow for now
 
+
+repeated_hypers = eva.get_repeated_hypers(folders_parameters, Hypers=[Hyper], for_given_hypers_only=best_hypers)
+
+left_best_hypers = []
 print "---------------------------------------------------------"
-pprint([(h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error) for h in best_hypers])  # To see validation performance and whether it makes sense to sample these
+for k, v in repeated_hypers.iteritems():
+    if len(v) <= 20:
+        left_best_hypers.append(v[0])
+        print len(v), v[0].modelname, v[0].n_normflows, v[0].best_val_loss, v[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
 print "---------------------------------------------------------"
-
-
-
 
 engine = create_engine('sqlite:///' + filepath_tests)  # os.path.join(__path__, foldername, '%s.db' % filename)
 Hyper.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
-for h in best_hypers:
+for h in left_best_hypers:
     sql_session = Session()
     extra_dict = {k: v for k, v in h.__dict__.iteritems()
                   if k[:4] not in ["best", "mixt", "radi", "plan", "base"] and k not in ["val_loss", "train_loss"]}
+
     with experiment_util.log_exceptions(filepath_tests + ".errors.txt", h.modelname, extra_dict):
         print("modelname=%s, nn=%i, percent=%g, best_val_loss=%g, best_val_error=%g"
               % (h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error))

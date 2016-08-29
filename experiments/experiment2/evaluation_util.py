@@ -33,11 +33,12 @@ if platform.system() == "Windows":
 __path__ = os.path.dirname(__file__)
 __parent__ = os.path.dirname(__path__)
 
-if __package__ is None:
+try:
+    from ..experiment1 import experiment_util as ex1util
+except ValueError:
     sys.path.append(__parent__)
     from experiment1 import experiment_util as ex1util
-else:
-    from ..experiment1 import experiment_util as ex1util
+
 
 
 
@@ -197,8 +198,10 @@ def reduce_results(f, results, acc=0):
     return acc
 
 
-def to_pandas_dict(best_hypers, keys=("datasetname", "modelname", "percent", "n_normflows", "best_val_loss", "best_val_error"),
-                   pandas_dict=None):
+def to_pandas_dict(best_hypers, keys=None, pandas_dict=None):
+    if keys is None:
+        keys = [k for k in best_hypers[0].__dict__.iterkeys() if not k.startswith("_")]
+
     if pandas_dict is None:
         pandas_dict = {}
         for k in keys:
@@ -236,6 +239,8 @@ def version_fix(best, prefix):
             setattr(best, "best_test_error", getattr(best, prefix + "_test_error_rate"))
     except AttributeError:
         pass
+    if hasattr(best, "minus_log_s"):
+        best.minus_log_s1 = best.minus_log_s
     return best
 
 
@@ -339,7 +344,8 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
     return best_hypers  # check for duplicates (might be the case in old hyper representation)
 
 
-def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_instead=None, key_files=lambda fn, path: True):
+def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_instead=None, key_files=lambda fn, path: True,
+                        for_given_hypers_only=None, version_fix=None, check_finite_test_values=True):
     if attrs_key is None:
         attrs_key = ("datasetname", "modelname",
         "opt_decay", "minus_log_s1", "batch_size",  #"opt_identifier", "opt_offset", "opt_momentum",
@@ -349,7 +355,6 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
             attrs_hash_str_instead = ("init_parameters",)
         else:
             attrs_hash_str_instead = tuple()
-
 
     all_hypers = []
     for f in gen_subfiles(*folders, key=key_files):
@@ -371,14 +376,28 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
                 except OperationalError:
                     continue
 
-    # sort hypers according to parameters
-    sorted_dict = defaultdict(list)
-    for h in all_hypers:
-        # s = "\n".join(["%-20s %s" % (attr, getattr(h, attr)) for attr in sort_attrs])
+    if version_fix is not None:
+        all_hypers = [version_fix(h) for h in all_hypers]
+    # take only finite values (might be due to cancelling the process)
+    if check_finite_test_values:
+        all_hypers = [h for h in all_hypers if np.isfinite(h.best_test_loss) and np.isfinite(h.best_test_error)]
+
+    def hyper_to_key(h):
         d = {attr: getattr(h, attr) for attr in attrs_key}
         for attr in attrs_hash_str_instead:
             d[attr] = hash(str(d[attr]))
-        sorted_dict[frozendict(d)].append(h)
+        return frozendict(d)
+
+    if for_given_hypers_only is None:
+        sorted_dict = defaultdict(list)
+    else:
+        sorted_dict = {}
+        for h in for_given_hypers_only:
+            sorted_dict[hyper_to_key(h)] = []
+    # sort hypers according to parameters
+    for h in all_hypers:
+        with ignored(KeyError):
+            sorted_dict[hyper_to_key(h)].append(h)
 
     return sorted_dict
 
@@ -648,4 +667,4 @@ def get_hist(samples):
     elif dimensionality == 2:
         _, edges_x = np.histogram(samples[:, 0], bins="auto", density=True)
         _, edges_y = np.histogram(samples[:, 1], bins="auto", density=True)
-        return np.histogram2d(samples[:, 0], samples[:, 1], bins=(edges_x, edges_y))
+        return np.histogram2d(samples[:, 1], samples[:, 0], bins=(edges_y, edges_x), normed=True)  # histogram exactly reverses x, y
