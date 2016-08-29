@@ -99,6 +99,12 @@ Session = sessionmaker(bind=engine)
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 for h in left_best_hypers:
+    # sometimes little things seem to be missing:
+    h.max_epochs_without_improvement = 40
+    h.logP_average_n_intermediate = 3
+    h.logP_average_n_final = 10
+    h.errorrate_average_n = 10
+
     sql_session = Session()
     extra_dict = {k: v for k, v in h.__dict__.iteritems()
                   if k[:4] not in ["best", "mixt", "radi", "plan", "base"] and k not in ["val_loss", "train_loss"]}
