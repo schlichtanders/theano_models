@@ -33,10 +33,12 @@ __parent__ = os.path.dirname(__path__)
 sys.path.append(__parent__)
 
 folders_parameters = [["experiment2", "windows_rerunold_all"],
-                      ["experiment2", "windows_rerun1_almost_all"],
+                      ["experiment2", "windows_rerun1"],
                       ["experiment2", "windows_rerunoldagain_radialflow_and_co"],
                       ["experiment2", "windows_rerunradialflow_all"],
-                      ["experiment2", "windows_reruntoy2d_all"]]
+                      ["experiment2", "windows_reruntoy2d_all"],
+                      ["experiment2", "windows_final_hoffentlich2_almost"],
+                      ["experiment2", "windows_final_hoffentlich"]]
 folders_parameters = [os.path.join(__parent__, *fp) for fp in folders_parameters]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -88,7 +90,7 @@ grouped_hypers = sorted(grouped_hypers, key=lambda hs: len(hs))
 left_best_hypers = []
 print "---------------------------------------------------------"
 for hs in grouped_hypers:
-    if len(hs) <= 20:
+    if len(hs) <= 15:
         left_best_hypers.append(hs[0])
         print len(hs), hs[0].modelname, hs[0].n_normflows, hs[0].best_val_loss, hs[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
 print "---------------------------------------------------------"
