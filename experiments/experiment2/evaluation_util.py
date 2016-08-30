@@ -286,7 +286,7 @@ def get_single_best_hyper(folders, modelname, Hypers=None, attr="best_val_loss",
 def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 'planarflow',
                                                    'planarflowdet', 'radialflow', 'radialflowdet'),
                    percentages=(0.25, 0.5, 1.0), n_normflows=(5,10,20,30), test_attrs=("best_val_loss", "val_error_rate"),
-                   key_files=lambda fn, path:True, take_best_n=1):
+                   key_files=lambda fn, path:True, take_best_n=1, check_finite_test_values=True):
     best_hypers = []
     all_hypers = []
     for f in gen_subfiles(*folders, key=key_files):
@@ -307,6 +307,10 @@ def get_best_hyper(folders, Hypers=None, modelnames=('baselinedet', 'baseline', 
                     break
                 except OperationalError:
                     continue
+
+    if check_finite_test_values:
+        print("ensured finite values")
+        all_hypers = [h for h in all_hypers if np.isfinite(h.best_test_loss) and np.isfinite(h.best_test_error)]
 
     if percentages is None:
         percentages = [None]
@@ -382,6 +386,7 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
         all_hypers = [version_fix(h) for h in all_hypers]
     # take only finite values (might be due to cancelling the process)
     if check_finite_test_values:
+        print("ensured finite values")
         all_hypers = [h for h in all_hypers if np.isfinite(h.best_test_loss) and np.isfinite(h.best_test_error)]
 
     def hyper_to_key(h):
@@ -406,7 +411,7 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
 
 def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_val_loss', 'best_val_error'],
                            modelnames=("planarflow", "planarflowdet", "radialflow", "radialflowdet"),
-                           percentages=None, n_normflows=None, take_best_n=1):
+                           percentages=None, n_normflows=None, take_best_n=1, check_finite_test_values=True):
     # # Collect models and find best ones
     # best_hyper = eva.get_best_hyper(["toy_windows", "toy_linux"], Hyper, model_prefixes, test_suffix=["best_val_loss"])
     Hyper = experiment_util.get_hyper()
@@ -453,7 +458,8 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
                                  n_normflows=n_normflows,
                                  test_attrs=test_attrs,
                                  key_files=lambda fn, p: datasetname in fn,
-                                 take_best_n=take_best_n)
+                                 take_best_n=take_best_n,
+                                 check_finite_test_values=check_finite_test_values)
 
     # further unify hyper representation
     new_best_hypers = []
