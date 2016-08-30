@@ -46,18 +46,15 @@ inf = float('inf')
 
 
 foldername = "final_rerun"
-filename = "several"
-datasetname = "energy"
+filename = "energy"
 
 #overwrite as far as given:
-if len(sys.argv) > 3:
-    foldername, filename, datasetname = sys.argv[1:4]
-elif len(sys.argv) > 2:
+if len(sys.argv) > 2:
     foldername, filename = sys.argv[1:3]
 elif len(sys.argv) > 1:
     foldername = sys.argv[1]
 
-subfolder = "final_hoffentlich2"
+subfolder = "final_hoffentlich3"
 with ignored(OSError):
     os.makedirs(os.path.join(__path__, subfolder, foldername))
 
@@ -73,15 +70,17 @@ def data_gen(hyper):
     return experiment_util.load_and_preprocess_data(hyper.datasetname)
 
 
-# compute everything:
-print "datasetname", datasetname
 
 n_normflows = [2, 4, 8, 16]
-best_hypers = eva.get_best_hyper_autofix(
-    datasetname, folders_parameters,
-    test_attrs=["best_val_error"],
-    n_normflows=n_normflows,
-    modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet"))
+
+best_hypers = []
+for dn in ["boston", "concrete", "energy", "kin8nm", "yacht", "toy2d"]:
+    best_hypers += eva.get_best_hyper_autofix(
+        dn, folders_parameters,
+        test_attrs=["best_val_error"],
+        n_normflows=n_normflows,
+        modelnames=("baseline", "baselinedet", "planarflow", "planarflowdet", "radialflow", "radialflowdet")
+    )
 
 
 grouped_hypers = eva.get_repeated_hypers(folders_parameters, Hypers=[Hyper], for_given_hypers_only=best_hypers).values()
@@ -90,9 +89,9 @@ grouped_hypers = sorted(grouped_hypers, key=lambda hs: len(hs))
 left_best_hypers = []
 print "---------------------------------------------------------"
 for hs in grouped_hypers:
-    if len(hs) <= 15:
+    if len(hs) <= 20:
         left_best_hypers.append(hs[0])
-        print len(hs), hs[0].modelname, hs[0].n_normflows, hs[0].best_val_loss, hs[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
+        print len(hs), hs[0].datasetname, hs[0].modelname, hs[0].n_normflows, hs[0].best_val_loss, hs[0].best_val_error  # To see validation performance and wv[0]etv[0]er it makes sense to sample tv[0]ese
 print "---------------------------------------------------------"
 
 engine = create_engine('sqlite:///' + filepath_tests)  # os.path.join(__path__, foldername, '%s.db' % filename)
@@ -115,8 +114,8 @@ for _h in left_best_hypers:
                   if k[:4] not in ["best", "mixt", "radi", "plan", "base"] and k not in ["val_loss", "train_loss"]}
 
     with experiment_util.log_exceptions(filepath_tests + ".errors.txt", h.modelname, extra_dict):
-        print("modelname=%s, nn=%i, percent=%g, best_val_loss=%g, best_val_error=%g"
-              % (h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error))
+        print("%s, %s, nn=%i, percent=%g, best_val_loss=%g, best_val_error=%g"
+              % (h.datasetname, h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error))
         new_h = eva.rerun_hyper(h, data_gen)
         sql_session.add(new_h)
         sql_session.commit()
