@@ -55,7 +55,7 @@ elif len(sys.argv) > 2:
 elif len(sys.argv) > 1:
     foldername = sys.argv[1]
 
-subfolder = "final_hoffentlich"
+subfolder = "final_hoffentlich2"
 with ignored(OSError):
     os.makedirs(os.path.join(__path__, subfolder, foldername))
 
