@@ -33,7 +33,12 @@ __parent__ = os.path.dirname(__path__)
 sys.path.append(__parent__)
 
 # folders_parameters = [["experiment1","withpercent"], ["experiment1","first_useful_hyperparameter_search"], ['experiment1','run_windows']]
-folders_parameters = [["experiment2","windows_newannealing2"]]
+# folders_parameters = [["experiment2","windows_newannealing2"]]
+folders_parameters = [["experiment2", "windows_rerunold_all"],
+                      ["experiment2", "windows_rerun1_almost_all"],
+                      ["experiment2", "windows_rerunoldagain_radialflow_and_co"],
+                      ["experiment2", "windows_rerunradialflow_all"],
+                      ["experiment2", "windows_reruntoy2d_all"]]
 folders_parameters = [os.path.join(__parent__, *fp) for fp in folders_parameters]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -75,27 +80,12 @@ def data_gen(hyper):
 # compute everything:
 print "datasetname", datasetname
 
-# n_normflows = [2, 5, 10, 25] if "toy" in datasetname else [10, 25]
-n_normflows = (10, 25)  # sometimes 20 is not good, then take 8
+n_normflows = (4, 8, 16)
 best_hypers = eva.get_best_hyper_autofix(
     datasetname, folders_parameters,
     test_attrs=["best_val_error"],
     n_normflows=n_normflows,
     modelnames=("radialflow",))
-
-for h in best_hypers:
-    h.annealing_T = 100  # this is now standard
-    h.adapt_prior = adapt_prior  # this not =) taken from foldername
-    h.percent = 1.0
-    h.init_parameters = None
-    if adapt_prior and h.init_parameters is not None and h.modelname != "baselinedet":
-        # baselinedet has no prior, hence no additional parameter is needed there
-        h.init_parameters = np.r_[h.init_parameters, 0]
-
-print "---------------------------------------------------------"
-pprint([(h.modelname, h.n_normflows, h.percent, h.best_val_loss, h.best_val_error) for h in best_hypers])  # To see validation performance and whether it makes sense to sample these
-print "---------------------------------------------------------"
-
 
 engine = create_engine('sqlite:///' + filepath_tests)  # os.path.join(__path__, foldername, '%s.db' % filename)
 Hyper.metadata.create_all(engine)
@@ -103,17 +93,20 @@ Session = sessionmaker(bind=engine)
 
 pm.RNG = NestedNamespace(tm.PooledRandomStreams(pool_size=int(1e8)), RandomStreams())
 for h in best_hypers:
-    for nn in (2,4,8,16):
-        new_h = Hyper(h.datasetname, h.modelname, h.optimization_type)
-        experiment_util.hyper_init_dict(new_h, h.__dict__)
-        new_h.n_normflows = nn
+    new_h = Hyper(h.datasetname, h.modelname, h.optimization_type)
+    experiment_util.hyper_init_dict(new_h, h.__dict__)
+    new_h.n_normflows = 2
+    new_h.annealing_T = 100  # this is now standard
+    new_h.adapt_prior = adapt_prior  # this not =) taken from foldername
+    new_h.percent = 1.0
+    new_h.init_parameters = None
 
-        sql_session = Session()
-        extra_dict = {k: v for k, v in new_h.__dict__.iteritems()
-                      if k[:4] not in ["best", "mixt", "radi", "plan", "base"] and k not in ["val_loss", "train_loss"]}
-        with experiment_util.log_exceptions(filepath_tests + ".errors.txt", new_h.modelname, extra_dict):
-            print("modelname=%s, nn=%i, percent=%g, best_val_loss=%g, best_val_error=%g"
-                  % (new_h.modelname, new_h.n_normflows, new_h.percent, new_h.best_val_loss, new_h.best_val_error))
-            new_h = eva.rerun_hyper(new_h, data_gen)
-            sql_session.add(new_h)
-            sql_session.commit()
+    sql_session = Session()
+    extra_dict = {k: v for k, v in new_h.__dict__.iteritems()
+                  if k[:4] not in ["best", "mixt", "radi", "plan", "base"] and k not in ["val_loss", "train_loss"]}
+    with experiment_util.log_exceptions(filepath_tests + ".errors.txt", new_h.modelname, extra_dict):
+        print("modelname=%s, nn=%i, percent=%g, best_val_loss=%g, best_val_error=%g"
+              % (new_h.modelname, new_h.n_normflows, new_h.percent, new_h.best_val_loss, new_h.best_val_error))
+        new_h = eva.rerun_hyper(new_h, data_gen)
+        sql_session.add(new_h)
+        sql_session.commit()
