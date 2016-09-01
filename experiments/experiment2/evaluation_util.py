@@ -400,7 +400,10 @@ def get_repeated_hypers(folders, Hypers=None, attrs_key=None, attrs_hash_str_ins
     else:
         sorted_dict = {}
         for h in for_given_hypers_only:
-            sorted_dict[hyper_to_key(h)] = []
+            key = hyper_to_key(h)
+            if key in sorted_dict:
+                print(key)
+            sorted_dict[key] = []
     # sort hypers according to parameters
     for h in all_hypers:
         with ignored(KeyError):
@@ -464,13 +467,20 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
     # further unify hyper representation
     new_best_hypers = []
     for h in best_hypers:
-        h.dim = dim
-        h.w_true = w_true
-        h.example_input = example_input
-        h.example_output = example_output
-        h.output_transfer = output_transfer
-        h.optimization_type = modelnames_to_optimization_type[h.modelname]
-        h.datasetname = datasetname
+        if not hasattr(h, "dim"):
+            h.dim = dim
+        if not hasattr(h, "w_true"):
+            h.w_true = w_true
+        if not hasattr(h, "example_input"):
+            h.example_input = example_input
+        if not hasattr(h, "example_output"):
+            h.example_output = example_output
+        if not hasattr(h, "output_transfer"):
+            h.output_transfer = output_transfer
+        if not hasattr(h, "optimization_type"):
+            h.optimization_type = modelnames_to_optimization_type[h.modelname]
+        if not hasattr(h, "datasetname"):
+            h.datasetname = datasetname
         with ignored(AttributeError):
             del h.id  # should be set new
         if not hasattr(h, "adapt_prior"):
@@ -483,6 +493,77 @@ def get_best_hyper_autofix(datasetname, folders_parameters, test_attrs=['best_va
         new_best_hypers.append(new_h)
 
     return new_best_hypers
+
+def get_best_new_hypers(folders, Hypers=None, datasetnames=None, modelnames=None, n_normflows=None,
+                        test_attrs=["best_val_error"], key_files=lambda fn, path:True, take_best_n=1,
+                        check_finite_test_values=True):
+    best_hypers = []
+    all_hypers = []
+    for f in gen_subfiles(*folders, key=key_files):
+        engine = create_engine('sqlite:///' + f)  # echo=True
+        if Hypers is None:
+            Base = automap_base()
+            Base.prepare(engine, reflect=True)
+            Hyper = Base.classes.hyper
+
+            session = Session(engine)
+            all_hypers += session.query(Hyper).all()
+        else:
+            for Hyper in Hypers:
+                try:
+                    Hyper.metadata.create_all(engine)
+                    session = Session(engine)
+                    all_hypers += session.query(Hyper).all()
+                    break
+                except OperationalError:
+                    continue
+
+    if check_finite_test_values:
+        print("ensured finite values")
+        all_hypers = [h for h in all_hypers if np.isfinite(h.best_test_loss) and np.isfinite(h.best_test_error)]
+
+    if datasetnames is None:
+        datasetnames = [None]
+    if modelnames is None:
+        modelnames = [None]
+    if n_normflows is None:
+        n_normflows = [None]
+
+    for attr, dn, mn, nn in product(test_attrs, datasetnames, modelnames, n_normflows):
+        # find best fit
+        sub_all_data = []
+        for h in all_hypers:
+            if nn is None:
+                b_nn = True
+            elif isinstance(nn, list):
+                b_nn = h.n_normflows in nn
+            else:
+                b_nn = h.n_normflows == nn
+
+            if dn is None:
+                b_dn = True
+            elif isinstance(dn, list):
+                b_dn = h.datasetname in dn
+            else:
+                b_dn = h.datasetname == dn
+
+            if mn is None:
+                b_mn = True
+            elif isinstance(mn, list):
+                b_mn = h.modelname in mn
+            else:
+                b_mn = h.modelname == mn
+            if b_nn and b_dn and b_mn:
+                # reformot old version to new one:
+                sub_all_data.append(h)
+
+        # print("get_best_hypers modelname=%s, len(sub)=%i" % (modelname, len(sub_all_data)))
+
+        if sub_all_data:
+            best_hypers += heapq.nsmallest(take_best_n, sub_all_data, key=get_key_hyper(attr))  # only the very best is wanted to keep it simple and clean
+        # else nothing is appended
+    return best_hypers  # check for duplicates (might be the case in old hyper representation)
+
 
 
 def rerun_hyper(hyper, data_gen):
